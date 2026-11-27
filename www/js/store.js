@@ -25,6 +25,9 @@ const blank = () => ({
   records: {},
   debts: [],
   notes: [],
+  receipts: [],
+  ledger: [],
+  parties: [],
   log: [],
   sync: { cfg: null, pushed: {}, lastPull: '' },
   settingsAt: 0,
@@ -80,7 +83,7 @@ export async function load() {
 function migrate(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-  for (const k of ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'log']) {
+  for (const k of ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'log', 'receipts', 'ledger', 'parties']) {
     if (!Array.isArray(out[k])) out[k] = [];
   }
   if (!out.records || typeof out.records !== 'object') out.records = {};
@@ -100,7 +103,7 @@ export const onChange = (fn) => { listeners.add(fn); return () => listeners.dele
 
 /* ───────── أساسيات ───────── */
 const SHARED_SETTINGS = ['pricePerAmp', 'currency'];
-export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log'];
+export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log', 'receipts', 'ledger', 'parties'];
 export const settings = () => db.settings;
 export const raw = () => db;
 export const live = (k) => db[k].filter((x) => !x.deleted);
@@ -188,8 +191,12 @@ export function rec(subId, ym) {
   const r = db.records[`${subId}|${ym}`];
   return r && !r.deleted ? r : null;
 }
+export const paidOf = (subId, ym) => (rec(subId, ym) ? rec(subId, ym).paid || 0 : 0);
+export function monthDue(sub, ym) { const r = rec(sub.id, ym); return r ? r.due || 0 : dueOf(sub); }
+export const remainOf = (sub, ym) => Math.max(0, monthDue(sub, ym) - paidOf(sub.id, ym));
 export function monthState(sub, ym) {
-  if (rec(sub.id, ym)) return 'paid';
+  const r = rec(sub.id, ym);
+  if (r) return (r.paid || 0) >= (r.due || 0) ? 'paid' : 'partial';
   if (ymIdx(ym) < ymIdx(sub.startYM || ymNow())) return 'before';
   if (ymIdx(ym) > ymIdx(ymNow())) return 'future';
   return 'unpaid';
@@ -198,14 +205,14 @@ export function unpaidMonths(sub) {
   const now = ymNow();
   const start = sub.startYM || now;
   if (ymIdx(start) > ymIdx(now)) return [];
-  return ymRange(start, now).filter((m) => !rec(sub.id, m));
+  return ymRange(start, now).filter((m) => { const k = monthState(sub, m); return k === 'unpaid' || k === 'partial'; });
 }
 export function manualBalance(subId) {
   return (ix().debtsBySub.get(subId) || []).reduce((t, d) => t + (d.kind === 'payment' ? -d.amount : d.amount), 0);
 }
 export function debtOf(sub) {
   const months = sub.active === false ? [] : unpaidMonths(sub);
-  const monthsAmount = months.length * dueOf(sub);
+  const monthsAmount = months.reduce((t, m) => t + remainOf(sub, m), 0);
   const manual = Math.max(0, manualBalance(sub.id));
   return { months, monthsAmount, manual, total: monthsAmount + manual };
 }
@@ -227,7 +234,8 @@ export function stats(subs, ym = ymNow()) {
     s.amps += sub.amps || 0;
     const st = monthState(sub, ym);
     if (st !== 'before') { s.expected += dueOf(sub); s.dueCount++; }
-    if (st === 'paid') { s.collected += rec(sub.id, ym).paid; s.paidCount++; }
+    if (st === 'paid' || st === 'partial') s.collected += rec(sub.id, ym).paid || 0;
+    if (st === 'paid') s.paidCount++;
     const d = debtOf(sub);
     s.debt += d.total; s.debtMonths += d.months.length; s.manual += d.manual;
     if (d.total > 0) s.debtors++;
@@ -264,34 +272,92 @@ export function addSubscriber({ name, amps, phone, startYM, cabinetId, connectio
   return sub;
 }
 
-export function payMonths(subId, yms) {
+export function totalRemain(subId, yms) {
   const sub = ix().sub.get(subId);
-  if (!sub) return;
-  const due = dueOf(sub);
-  const prev = {};
-  for (const ym of yms) {
+  return sub ? yms.reduce((t, m) => t + remainOf(sub, m), 0) : 0;
+}
+// تسديد مبلغ (كامل أو ناقص) يُوزَّع على الأشهر بالترتيب، ويُسجَّل إيصال بالمستلم والوقت
+export function payAmount(subId, yms, amount) {
+  const sub = ix().sub.get(subId);
+  if (!sub) return null;
+  const list = [...new Set(yms)].sort();
+  let left = Math.round(amount);
+  const prev = {}; const items = []; const t = Date.now(); const by = db.settings.user || '';
+  for (const ym of list) {
     const k = `${subId}|${ym}`;
+    const cur = rec(subId, ym);
+    const due = cur ? cur.due || 0 : dueOf(sub);
+    const already = cur ? cur.paid || 0 : 0;
+    const need = Math.max(0, due - already);
+    if (due > 0 && (left <= 0 || need <= 0)) continue;
+    const take = due > 0 ? Math.min(left, need) : 0;
     prev[k] = db.records[k] ? { ...db.records[k] } : null;
-    db.records[k] = { id: k, subId, ym, due, paid: due, at: Date.now(), by: db.settings.user || '', updatedAt: Date.now(), deleted: false };
+    db.records[k] = { id: k, subId, ym, due, paid: already + take, at: t, by, updatedAt: t, deleted: false };
+    items.push({ ym, amount: take });
+    left -= take;
   }
-  logAct(`تسديد ${yms.length} ${yms.length > 2 ? 'أشهر' : 'شهر'} — ${sub.name}`);
+  const total = items.reduce((a, b) => a + b.amount, 0);
+  const r = add('receipts', { subId, kind: 'pay', amount: total, items, at: t });
+  prev.__receipt = r.id;
+  const short = Math.max(0, remainOfList(sub, list));
+  logAct(`استلام ${total} من ${sub.name}${short ? ` (يتبقى ${short})` : ''}`);
   changed();
-  return prev;
+  return { prev, receipt: r, total, short };
+}
+const remainOfList = (sub, list) => list.reduce((t, m) => t + remainOf(sub, m), 0);
+export function payMonths(subId, yms) {
+  const res = payAmount(subId, yms, totalRemain(subId, yms));
+  return res ? res.prev : null;
 }
 export function unpayMonth(subId, ym) {
   const k = `${subId}|${ym}`;
   const r = db.records[k];
-  if (!r || r.deleted) return;
+  if (!r || r.deleted) return null;
+  const prev = { [k]: { ...r } };
   r.deleted = true; r.updatedAt = Date.now();
-  logAct(`إلغاء تأشير شهر ${ym} — ${ix().sub.get(subId)?.name || ''}`);
+  const rc = add('receipts', { subId, kind: 'cancel', amount: -(r.paid || 0), items: [{ ym, amount: -(r.paid || 0) }], at: Date.now() });
+  prev.__receipt = rc.id;
+  logAct(`إلغاء تسديد شهر ${ym} — ${ix().sub.get(subId)?.name || ''}`);
   changed();
+  return prev;
 }
 export function restoreRecords(prev) {
-  for (const [k, v] of Object.entries(prev)) {
-    if (v) db.records[k] = v;
+  for (const [k, v] of Object.entries(prev || {})) {
+    if (k === '__receipt') {
+      const rc = db.receipts.find((x) => x.id === v);
+      if (rc) { rc.deleted = true; rc.updatedAt = Date.now(); }
+    } else if (v) db.records[k] = { ...v, updatedAt: Date.now() };
     else if (db.records[k]) { db.records[k].deleted = true; db.records[k].updatedAt = Date.now(); }
   }
   changed();
+}
+export const receiptsOf = (subId) => live('receipts').filter((r) => r.subId === subId).sort((a, b) => b.at - a.at);
+
+/* ───────── الواردات والصادرات ───────── */
+// ledger: kind = in (وارد) | out (صادر/مصروف) | owe (مبلغ يطلبه الطرف مني، لا حركة نقد)
+export function addLedger({ kind, amount, cat, partyId, note, at }) {
+  const e = add('ledger', { kind, amount, cat: cat || '', partyId: partyId || null, note: note || '', at: at || Date.now() });
+  const txt = { in: 'وارد', out: 'مصروف', owe: 'مطلوب لجهة' }[kind];
+  logAct(`${txt} ${amount}${cat ? ' — ' + cat : ''}`);
+  return e;
+}
+export function addParty(name) { const p = add('parties', { name }); logAct(`قائمة جديدة: ${name}`); return p; }
+export const parties = () => live('parties').sort((a, b) => a.createdAt - b.createdAt);
+export const ledgerOf = (partyId) => live('ledger').filter((e) => e.partyId === partyId).sort((a, b) => b.at - a.at);
+export const partyBalance = (partyId) => ledgerOf(partyId).reduce((t, e) => t + (e.kind === 'owe' ? e.amount : e.kind === 'out' ? -e.amount : 0), 0);
+const ymFromTs = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+export function monthReport(ym) {
+  const receipts = live('receipts').filter((r) => ymFromTs(r.at) === ym);
+  const subsIncome = receipts.reduce((t, r) => t + r.amount, 0);
+  const byReceiver = {};
+  receipts.forEach((r) => { const n = r.by || 'غير معروف'; byReceiver[n] = (byReceiver[n] || 0) + r.amount; });
+  const led = live('ledger').filter((e) => ymFromTs(e.at) === ym);
+  const otherIn = led.filter((e) => e.kind === 'in').reduce((t, e) => t + e.amount, 0);
+  const outs = led.filter((e) => e.kind === 'out');
+  const out = outs.reduce((t, e) => t + e.amount, 0);
+  const outByCat = {};
+  outs.forEach((e) => { const c = e.cat || (e.partyId ? parties().find((p) => p.id === e.partyId)?.name : '') || 'أخرى'; outByCat[c] = (outByCat[c] || 0) + e.amount; });
+  return { subsIncome, otherIn, income: subsIncome + otherIn, out, net: subsIncome + otherIn - out, byReceiver, outByCat, entries: led.sort((a, b) => b.at - a.at), receipts };
 }
 
 export function addDebtEntry({ subId, kind, amount, note }) {

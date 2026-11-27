@@ -4,7 +4,7 @@ import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, ymOf, MONTHS, normDigits, 
 import * as S from './store.js';
 import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, empty } from './ui.js';
 import { nav } from './nav.js';
-import { ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
+import { dt, ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
 
 const allCabinets = () => {
   const out = [];
@@ -97,36 +97,52 @@ forms.sub = (fd, form) => {
 };
 
 /* ───────── الدفع ───────── */
-export function paySheet(subId) {
+export function paySheet(subId, preYm) {
   const s = S.ix().sub.get(subId);
   if (!s) return;
   const unpaid = S.unpaidMonths(s);
-  const future = [1, 2, 3].map((i) => ymAdd(ymNow(), i)).filter((m) => !S.rec(subId, m));
+  const future = [1, 2, 3].map((i) => ymAdd(ymNow(), i)).filter((m) => S.monthState(s, m) !== 'paid');
   const months = [...unpaid, ...future];
   const due = S.dueOf(s);
-  const first = unpaid[0] || future[0];
+  const first = preYm && months.includes(preYm) ? preYm : unpaid[0] || future[0];
+  const chip = (m) => {
+    const part = S.monthState(s, m) === 'partial';
+    const tag = part ? `<small>متبقي ${fmtNum(S.remainOf(s, m))}</small>` : unpaid.includes(m) ? '' : '<small>مقدّم</small>';
+    return `<label class="mchip ${unpaid.includes(m) ? 'late' : ''}"><input type="checkbox" name="ym" value="${m}" ${m === first ? 'checked' : ''}><span>${esc(ymLabel(m))}${tag}</span></label>`;
+  };
   const w = openSheet(`<form data-form="pay" data-id="${subId}">
     <h3 class="sh-title">تسجيل دفعة</h3>
     <div class="who">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${fmtNum(s.amps)} أمبير${due ? ' · ' + money(due) + ' شهريًا' : ''}</small></div></div>
     ${due ? '' : `<div class="banner warn">${icon('alert')}<span>سعر الأمبير غير محدد، فلن يُحسب مبلغ. حدده من «المزيد».</span></div>`}
-    <div class="field"><span>اختر الأشهر المدفوعة</span>
-      <div class="mchips">${months.map((m) => `<label class="mchip ${unpaid.includes(m) ? 'late' : ''}"><input type="checkbox" name="ym" value="${m}" ${m === first ? 'checked' : ''}><span>${esc(ymLabel(m))}${unpaid.includes(m) ? '' : '<small>مقدّم</small>'}</span></label>`).join('')}</div>
+    <div class="field"><span>اختر الأشهر</span>
+      <div class="mchips">${months.map(chip).join('')}</div>
       ${unpaid.length > 1 ? `<button type="button" class="link" data-all>تحديد كل المتأخر (${unpaid.length})</button>` : ''}
     </div>
-    <div class="total"><span>الإجمالي</span><b id="pay-total">${money(due)}</b></div>
+    ${due ? `<label class="field"><span>المبلغ المستلم (${esc(S.settings().currency)})</span><input name="amount" id="pay-amt" inputmode="decimal" autocomplete="off"></label>
+    <div class="total"><span id="pay-rest-l">المطلوب</span><b id="pay-total">${money(due)}</b></div>` : ''}
     <button class="btn primary block lg" type="submit">${icon('check')}تسجيل الدفعة</button>
   </form>`, {
     onMount: (el) => {
       const form = el.querySelector('form');
-      const upd = () => {
-        const n = form.querySelectorAll('input[name=ym]:checked').length;
-        el.querySelector('#pay-total').textContent = `${fmtNum(n * due)} ${S.settings().currency}`;
+      const amt = form.querySelector('#pay-amt');
+      const checked = () => [...form.querySelectorAll('input[name=ym]:checked')].map((i) => i.value);
+      const need = () => S.totalRemain(subId, checked());
+      const show = () => {
+        const n = checked().length;
         form.querySelector('button[type=submit]').disabled = !n;
+        if (!amt) return;
+        const total = need(); const got = parseNum(amt.value);
+        const L = el.querySelector('#pay-rest-l'); const T = el.querySelector('#pay-total');
+        if (got > 0 && got < total) { L.textContent = 'سيتبقى عليه'; T.textContent = `${fmtNum(total - got)} ${S.settings().currency}`; T.className = 'bad'; }
+        else if (got > total) { L.textContent = 'المبلغ أكبر من المطلوب'; T.textContent = `${fmtNum(total)} ${S.settings().currency}`; T.className = 'bad'; }
+        else { L.textContent = 'المطلوب'; T.textContent = `${fmtNum(total)} ${S.settings().currency}`; T.className = ''; }
       };
-      form.addEventListener('change', upd);
+      const reset = () => { if (amt) amt.value = need() || ''; show(); };
+      form.addEventListener('change', (e) => { if (e.target.name === 'ym') reset(); });
+      if (amt) amt.addEventListener('input', show);
       const all = form.querySelector('[data-all]');
-      if (all) all.onclick = () => { unpaid.forEach((m) => { form.querySelector(`input[value="${m}"]`).checked = true; }); upd(); };
-      upd();
+      if (all) all.onclick = () => { unpaid.forEach((m) => { form.querySelector(`input[value="${m}"]`).checked = true; }); reset(); };
+      reset();
     },
   });
   return w;
@@ -134,15 +150,22 @@ export function paySheet(subId) {
 forms.pay = (fd, form) => {
   const yms = fd.getAll('ym');
   if (!yms.length) return toast('اختر شهرًا واحدًا على الأقل');
-  const prev = S.payMonths(form.dataset.id, yms);
+  const id = form.dataset.id;
+  const sub = S.ix().sub.get(id);
+  if (!S.dueOf(sub)) { const prev = S.payMonths(id, yms); closeSheet(); toast('تم تسجيل الدفعة', { undo: () => S.restoreRecords(prev) }); return; }
+  const total = S.totalRemain(id, yms);
+  const amount = parseNum(fd.get('amount'));
+  if (!(amount > 0)) return toast('اكتب المبلغ المستلم');
+  if (amount > total) return toast(`المبلغ أكبر من المطلوب (${fmtNum(total)})`);
+  const r = S.payAmount(id, yms, amount);
   closeSheet();
-  toast(`تم تسجيل ${yms.length} ${yms.length > 2 ? 'أشهر' : yms.length === 2 ? 'شهرين' : 'شهر'}`, { undo: () => S.restoreRecords(prev) });
+  toast(r.short ? `استلمت ${fmtNum(r.total)} — يتبقى ${fmtNum(r.short)}` : `تم استلام ${fmtNum(r.total)} — ${sub.name}`, { undo: () => S.restoreRecords(r.prev) });
 };
 function quickPay(subId) {
   const s = S.ix().sub.get(subId);
   const d = S.debtOf(s);
   if (!d.months.length) return paySheet(subId);
-  if (d.months.length === 1) {
+  if (d.months.length === 1 && S.monthState(s, d.months[0]) === 'unpaid') {
     const prev = S.payMonths(subId, d.months);
     toast(`تم تسديد ${ymLabel(d.months[0])} — ${s.name}`, { undo: () => S.restoreRecords(prev) });
   } else paySheet(subId);
@@ -229,14 +252,15 @@ export function generatorSheet(g) {
     <h3 class="sh-title">${g ? 'تعديل المولدة' : 'مولدة جديدة'}</h3>
     <label class="field"><span>اسم المولدة</span><input name="name" value="${esc(g?.name || '')}" placeholder="مثال: المولدة الجديدة" autocomplete="off" required autofocus></label>
     <label class="field"><span>سعر الأمبير لهذه المولدة</span><input name="price" inputmode="decimal" value="${g?.price > 0 ? g.price : ''}" placeholder="${S.settings().pricePerAmp > 0 ? 'اتركه فارغًا لاستعمال ' + fmtNum(S.settings().pricePerAmp) : 'مثال: 7000'}" autocomplete="off"></label>
+    <label class="field"><span>سعة المولدة (أمبير)</span><input name="capacity" inputmode="decimal" value="${g?.capacity > 0 ? g.capacity : ''}" placeholder="مثال: 100" autocomplete="off"></label>
     <p class="hint">كل مولدة تحصل تلقائيًا على 3 فيزات، ويمكنك تغيير أسمائها لاحقًا.</p>
     <button class="btn primary block lg" type="submit">${g ? 'حفظ' : 'إضافة المولدة'}</button></form>`);
 }
 forms.gen = (fd, form) => {
   const name = (fd.get('name') || '').trim(); if (!name) return toast('اكتب الاسم');
-  const price = parseNum(fd.get('price'));
-  if (form.dataset.id) { S.upd('generators', form.dataset.id, { name, price: price > 0 ? price : null }); toast('تم الحفظ'); closeSheet(); }
-  else { const g = S.addGenerator({ name, price }); closeSheet(); toast('تمت إضافة المولدة'); nav.go(`/gen/${g.id}`); }
+  const price = parseNum(fd.get('price')); const capacity = parseNum(fd.get('capacity'));
+  if (form.dataset.id) { S.upd('generators', form.dataset.id, { name, price: price > 0 ? price : null, capacity: capacity > 0 ? capacity : null }); toast('تم الحفظ'); closeSheet(); }
+  else { const g = S.addGenerator({ name, price }); if (capacity > 0) S.upd('generators', g.id, { capacity }); closeSheet(); toast('تمت إضافة المولدة'); nav.go(`/gen/${g.id}`); }
 };
 function phasesSheet(genId) {
   const ps = S.phasesOf(genId);
@@ -337,7 +361,36 @@ const copyText = async (t) => {
   }
 };
 
+const CATS = ['دهن', 'غاز', 'صيانة', 'رواتب', 'قطع غيار', 'أخرى'];
+function ledgerSheet({ kind, partyId }) {
+  const party = partyId ? S.live('parties').find((p) => p.id === partyId) : null;
+  const title = { in: 'تسجيل وارد', out: party ? `تسديد إلى ${party.name}` : 'تسجيل مصروف', owe: `مطلوب لـ ${party?.name || ''}` }[kind];
+  const today = new Date().toISOString().slice(0, 10);
+  openSheet(`<form data-form="ledger" data-kind="${kind}" data-party="${partyId || ''}">
+    <h3 class="sh-title">${esc(title)}</h3>
+    <label class="field"><span>المبلغ (${esc(S.settings().currency)})</span><input name="amount" inputmode="decimal" autocomplete="off" required autofocus></label>
+    ${party ? '' : `<label class="field"><span>${kind === 'in' ? 'مصدر الوارد' : 'نوع المصروف'}</span><input name="cat" list="cats" placeholder="${kind === 'in' ? 'مثال: اشتراك خارجي' : 'مثال: دهن'}" autocomplete="off"></label>${kind === 'out' ? `<datalist id="cats">${CATS.map((c) => `<option value="${c}">`).join('')}</datalist>` : ''}`}
+    <label class="field"><span>ملاحظة</span><input name="note" autocomplete="off"></label>
+    <label class="field"><span>التاريخ</span><input type="date" name="date" value="${today}"></label>
+    <button class="btn primary block lg" type="submit">${icon('check')}حفظ</button></form>`);
+}
+forms.ledger = (fd, form) => {
+  const amount = parseNum(fd.get('amount'));
+  if (!(amount > 0)) return toast('اكتب المبلغ');
+  const ds = fd.get('date'); const d = ds && ds !== new Date().toISOString().slice(0, 10) ? new Date(`${ds}T12:00:00`).getTime() : Date.now();
+  S.addLedger({ kind: form.dataset.kind, amount, cat: (fd.get('cat') || '').trim(), partyId: form.dataset.party || null, note: (fd.get('note') || '').trim(), at: Number.isFinite(d) ? d : Date.now() });
+  closeSheet(); toast('تم الحفظ');
+};
+forms.party = (fd) => {
+  const name = (fd.get('name') || '').trim(); if (!name) return toast('اكتب اسم القائمة');
+  const p = S.addParty(name); closeSheet(); nav.go(`/party/${p.id}`);
+};
+
 export const actions = {
+  'ledger-add': (el) => ledgerSheet({ kind: el.dataset.kind, partyId: el.dataset.party }),
+  'ledger-del': async (el) => { if (await confirmBox({ title: 'حذف هذه الحركة؟', ok: 'حذف', danger: true })) S.upd('ledger', el.dataset.id, { deleted: true }); },
+  'party-add': () => openSheet(`<form data-form="party"><h3 class="sh-title">قائمة جديدة</h3><label class="field"><span>اسم الجهة</span><input name="name" placeholder="مثال: أبو الغاز، الصناعة، محلات محمود" autocomplete="off" required autofocus></label><button class="btn primary block lg" type="submit">إنشاء</button></form>`),
+  'party-del': async (el) => { if (await confirmBox({ title: 'حذف القائمة؟', text: 'تُحذف حركاتها أيضًا.', ok: 'حذف', danger: true })) { const id = el.dataset.id; S.live('ledger').filter((e) => e.partyId === id).forEach((e) => S.upd('ledger', e.id, { deleted: true })); S.upd('parties', id, { deleted: true }); nav.back(); } },
   'sync-create': () => promptSheet({ title: 'إنشاء مساحة مشتركة', label: 'اسم المساحة (مثال: مولدة الحي)', value: S.generators()[0]?.name || '', onSave: async (v) => {
     toast('جارٍ الإنشاء…');
     try { const codes = await SY.createWorkspace(v.trim()); setTimeout(() => codesSheet(codes), 260); toast('تم إنشاء المساحة'); } catch (e) { toast('تعذّر الإنشاء، تحقق من الاتصال'); }
@@ -371,7 +424,8 @@ export const actions = {
     const { id, ym } = el.dataset; const s = S.ix().sub.get(id);
     const k = S.monthState(s, ym);
     if (k === 'before') return toast('هذا الشهر قبل بداية حساب المشترك');
-    if (k === 'paid') { S.unpayMonth(id, ym); toast(`أُلغي تأشير ${ymLabel(ym)}`, { undo: () => S.payMonths(id, [ym]) }); }
+    if (k === 'paid') { const prev = S.unpayMonth(id, ym); toast(`أُلغي تسديد ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev) }); }
+    else if (k === 'partial') paySheet(id, ym);
     else { const prev = S.payMonths(id, [ym]); toast(`تم تأشير ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev) }); }
   },
   'quick-pay': (el) => quickPay(el.dataset.id),

@@ -69,7 +69,7 @@ const genCard = (g, ym) => {
     <div class="gen-ic">${icon('gen')}</div>
     <div class="grow">
       <b>${esc(g.name)}</b>
-      <small>${s.count} مشترك · ${fmtNum(s.amps)} أمبير</small>
+      <small>${s.count} مشترك · ${fmtNum(s.amps)}${g.capacity > 0 ? ' / ' + fmtNum(g.capacity) : ''} أمبير${g.capacity > 0 && s.amps > g.capacity ? ' ⚠' : ''}</small>
       ${bar(pct, pct >= 1 ? 'ok' : '')}
       <div class="gen-foot"><span>محصّل ${Math.round(pct * 100)}%</span><span class="${s.debt ? 'bad' : 'ok'}">${s.debt ? 'ديون ' + moneyShort(s.debt) : 'لا ديون'}</span></div>
     </div>${icon('next', 'chev')}</a>`;
@@ -105,7 +105,7 @@ export function home() {
       <button class="q" data-act="add-sub">${icon('plus')}<span>مشترك جديد</span></button>
       <button class="q" data-act="pay-pick">${icon('check')}<span>تسجيل دفعة</span></button>
       <button class="q" data-act="add-note">${icon('note')}<span>ملاحظة</span></button>
-      <button class="q" data-act="go" data-to="/import">${icon('list')}<span>إدخال سريع</span></button>
+      <button class="q" data-act="go" data-to="/books">${icon('wallet')}<span>حساباتي</span></button>
     </div>
     ${log.length ? secH('آخر النشاط', `<a class="link" href="#/log">الكل</a>`) + `<div class="card list">${log.map((l) => `<div class="li"><span class="dot"></span><div class="grow"><b>${esc(l.text)}</b><small>${timeAgo(l.at)}${l.by ? ' · ' + esc(l.by) : ''}</small></div></div>`).join('')}</div>` : ''}
   </main>`;
@@ -123,11 +123,23 @@ export function generator({ id }) {
   const cabs = S.cabinetsOf(pid);
   const ps = S.stats(S.subsOfPhase(pid), ym);
   const price = S.priceOfGen(id);
+  const gs = S.stats(S.subsOfGen(id), ym);
+  const cap = g.capacity > 0 ? g.capacity : 0;
+  const over = cap && gs.amps > cap;
+  const inv = `<div class="card inv">
+    <div class="card-hr"><h3 class="card-h">جرد المولدة</h3><b class="${over ? 'bad' : ''}">${fmtNum(gs.amps)}${cap ? ' / ' + fmtNum(cap) : ''} أمبير</b></div>
+    ${cap ? bar(gs.amps / cap, over ? 'bad' : gs.amps / cap > 0.9 ? 'warn' : 'ok') : '<p class="muted sm">حدد سعة المولدة من «خيارات» لتظهر نسبة الحمل.</p>'}
+    ${over ? `<div class="banner warn">${icon('alert')}<span>الحمل تجاوز السعة بمقدار ${fmtNum(gs.amps - cap)} أمبير.</span></div>` : cap ? `<p class="muted sm">المتاح ${fmtNum(cap - gs.amps)} أمبير.</p>` : ''}
+    <table class="inv-t"><thead><tr><th>الفيز</th><th>مشترك</th><th>أمبير</th><th>مسدد</th></tr></thead><tbody>
+      ${phases.map((p) => { const st = S.stats(S.subsOfPhase(p.id), ym); return `<tr><td>${esc(p.name)}</td><td>${st.count}</td><td>${fmtNum(st.amps)}</td><td>${st.dueCount ? Math.round((st.paidCount / st.dueCount) * 100) : 0}%</td></tr>`; }).join('')}
+      <tr class="tot"><td>الكل</td><td>${gs.count}</td><td>${fmtNum(gs.amps)}</td><td>${gs.dueCount ? Math.round((gs.paidCount / gs.dueCount) * 100) : 0}%</td></tr>
+    </tbody></table></div>`;
   const html = appbar({
     title: g.name, sub: price > 0 ? `سعر الأمبير ${money(price)}` : 'سعر الأمبير غير محدد',
     actions: abBtn('gen-menu', 'more', 'خيارات', `data-id="${id}"`), extra: seg,
   }) + `
   <main class="body">
+    ${inv}
     <div class="stats3">
       <div><b>${ps.count}</b><small>مشترك</small></div>
       <div><b>${fmtNum(ps.amps)}</b><small>أمبير</small></div>
@@ -210,6 +222,16 @@ export function cabinet({ id }) {
   return { tab: 'home', html, live: 'cab' };
 }
 
+export const dt = (ts) => {
+  const d = new Date(ts); const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};
+export const receiptRow = (r) => {
+  const cancel = r.kind === 'cancel';
+  const months = (r.items || []).map((i) => ymLabel(i.ym)).join('، ');
+  return `<div class="li"><span class="dot ${cancel ? 'bad' : 'ok'}"></span><div class="grow"><b>${cancel ? 'إلغاء تسديد' : 'استلام'} · ${esc(months)}</b><small>${esc(r.by || 'غير معروف')} · ${dt(r.at)}</small></div><b class="${cancel ? 'bad' : ''}">${money(r.amount)}</b></div>`;
+};
+
 /* ───────── المشترك ───────── */
 export function subscriber({ id }) {
   const s = S.ix().sub.get(id);
@@ -221,11 +243,11 @@ export function subscriber({ id }) {
     const ym = `${year}-${String(i + 1).padStart(2, '0')}`;
     const k = S.monthState(s, ym);
     return `<button class="mt ${k} ${ym === now ? 'cur' : ''}" data-act="tile" data-id="${id}" data-ym="${ym}" ${s.active === false ? 'disabled' : ''}>
-      <b>${i + 1}</b><small>${MONTHS[i]}</small>${k === 'paid' ? icon('check', 'mt-ic') : ''}</button>`;
+      <b>${i + 1}</b><small>${MONTHS[i]}</small>${k === 'paid' ? icon('check', 'mt-ic') : k === 'partial' ? '<i class="mt-half"></i>' : ''}</button>`;
   }).join('');
   const debts = (S.ix().debtsBySub.get(id) || []).slice().sort((a, b) => b.at - a.at);
   const notes = S.live('notes').filter((n) => n.subId === id || (n.connId && n.connId === s.connectionId)).sort((a, b) => b.createdAt - a.createdAt);
-  const paid = Object.values(S.raw().records).filter((r) => r.subId === id && !r.deleted).sort((a, b) => b.at - a.at).slice(0, 6);
+  const rcs = S.receiptsOf(id).slice(0, 12);
   const partners = S.subsOfConn(s.connectionId).filter((x) => x.id !== id);
   const extra = `<div class="sub-hero">
     <div class="pill"><small>جوزة</small><b>${conn?.no ?? '—'}</b></div>
@@ -245,8 +267,8 @@ export function subscriber({ id }) {
     <div class="card">
       <div class="yr"><button data-act="year" data-d="-1" aria-label="السنة السابقة">${icon('back')}</button><b>${year}</b><button data-act="year" data-d="1" aria-label="السنة التالية">${icon('next')}</button></div>
       <div class="mgrid">${tiles}</div>
-      <div class="legend"><span><i class="lg paid"></i>مسدد</span><span><i class="lg unpaid"></i>غير مسدد</span><span><i class="lg future"></i>قادم</span><span><i class="lg before"></i>قبل البداية</span></div>
-      <p class="hint">اضغط على الشهر للتأشير أو للتراجع.</p>
+      <div class="legend"><span><i class="lg paid"></i>مسدد</span><span><i class="lg partial"></i>ناقص</span><span><i class="lg unpaid"></i>غير مسدد</span><span><i class="lg future"></i>قادم</span><span><i class="lg before"></i>قبل البداية</span></div>
+      <p class="hint">اضغط على شهر غير مسدد لتسديده، وعلى المسدد لإلغائه.</p>
     </div>
     ${partners.length ? `<div class="card"><h3 class="card-h">شركاء على نفس الجوزة</h3>${partners.map((p) => subRow(p)).join('')}</div>` : ''}
     <div class="card">
@@ -258,9 +280,54 @@ export function subscriber({ id }) {
       <div class="card-hr"><h3 class="card-h">الملاحظات</h3><button class="link" data-act="add-note" data-id="${id}">${icon('plus')}ملاحظة</button></div>
       ${notes.length ? notes.map(noteRow).join('') : '<p class="muted sm">لا توجد ملاحظات.</p>'}
     </div>
-    ${paid.length ? `<div class="card"><h3 class="card-h">آخر الدفعات</h3>${paid.map((r) => `<div class="li"><span class="dot ok"></span><div class="grow"><b>${ymLabel(r.ym)}</b><small>${new Date(r.at).toLocaleDateString('en-GB')}${r.by ? ' · ' + esc(r.by) : ''}</small></div><b>${money(r.paid)}</b></div>`).join('')}</div>` : ''}
+    ${rcs.length ? `<div class="card"><h3 class="card-h">سجل الاستلام</h3>${rcs.map(receiptRow).join('')}</div>` : ''}
   </main>`;
   return { tab: 'home', html };
+}
+
+
+/* ───────── الحسابات: واردات وصادرات وقوائم الجهات ───────── */
+const ymSwitch = (ym) => `<div class="ymsw"><button data-act="ym" data-d="-1" aria-label="الشهر السابق">${icon('back')}</button><span>${esc(ymLabel(ym))}</span><button data-act="ym" data-d="1" aria-label="الشهر التالي">${icon('next')}</button></div>`;
+const ledgerRow = (e) => {
+  const party = e.partyId ? S.live('parties').find((p) => p.id === e.partyId) : null;
+  const tone = e.kind === 'in' ? 'ok' : e.kind === 'out' ? 'bad' : 'warn';
+  const lab = { in: 'وارد', out: 'مصروف', owe: 'مطلوب' }[e.kind];
+  return `<div class="li"><span class="dot ${tone}"></span><div class="grow"><b>${esc(e.cat || party?.name || lab)}${e.cat && party ? ' · ' + esc(party.name) : ''}</b><small>${lab}${e.note ? ' · ' + esc(e.note) : ''} · ${esc(e.by || '')} · ${dt(e.at)}</small></div><b class="${tone === 'ok' ? 'ok' : tone === 'bad' ? 'bad' : ''}">${money(e.amount)}</b><button class="mini sq" data-act="ledger-del" data-id="${e.id}" aria-label="حذف">${icon('trash')}</button></div>`;
+};
+export function books() {
+  const ym = ui.ym; const r = S.monthReport(ym);
+  const parties = S.parties();
+  const recv = Object.entries(r.byReceiver);
+  const cats = Object.entries(r.outByCat).sort((a, b) => b[1] - a[1]);
+  const html = appbar({ title: 'حساباتي', sub: 'الواردات والصادرات', back: true, extra: ymSwitch(ym) }) + `
+  <main class="body">
+    <div class="card books-sum">
+      <div class="net ${r.net < 0 ? 'bad' : 'ok'}"><small>الصافي</small><b>${money(r.net)}</b></div>
+      <div class="bs-g"><div><small>الواردات</small><b class="ok">${money(r.income)}</b></div><div><small>المصروفات</small><b class="bad">${money(r.out)}</b></div></div>
+      <div class="bs-rows"><div><span>اشتراكات محصّلة</span><b>${money(r.subsIncome)}</b></div><div><span>واردات أخرى</span><b>${money(r.otherIn)}</b></div></div>
+      <div class="btn-row"><button class="btn soft" data-act="ledger-add" data-kind="in">${icon('plus')}وارد</button><button class="btn soft" data-act="ledger-add" data-kind="out">${icon('plus')}مصروف</button></div>
+    </div>
+    ${recv.length ? `<div class="card"><h3 class="card-h">من استلم الاشتراكات هذا الشهر</h3>${recv.map(([n, v]) => `<div class="li"><span class="dot ok"></span><div class="grow"><b>${esc(n)}</b></div><b>${money(v)}</b></div>`).join('')}</div>` : ''}
+    ${cats.length ? `<div class="card"><h3 class="card-h">المصروفات حسب النوع</h3>${cats.map(([n, v]) => `<div class="li"><span class="dot bad"></span><div class="grow"><b>${esc(n)}</b></div><b>${money(v)}</b></div>`).join('')}</div>` : ''}
+    ${secH('قوائم الجهات', `<button class="link" data-act="party-add">${icon('plus')}قائمة</button>`)}
+    ${parties.length ? `<div class="card list">${parties.map((p) => { const b = S.partyBalance(p.id); return `<a class="set" href="#/party/${p.id}">${icon('wallet', 'set-ic')}<div class="grow"><b>${esc(p.name)}</b><small>${b > 0 ? 'مطلوب منك ' + money(b) : b < 0 ? 'دفعت زيادة ' + money(-b) : 'لا مطلوب'}</small></div>${icon('next', 'chev')}</a>`; }).join('')}</div>` : `<p class="muted sm">أنشئ قائمة لكل جهة تطلبك: أبو الغاز، أبو الدهن، الصناعة، المحلات…</p>`}
+    ${secH('حركات الشهر')}
+    ${r.entries.length ? `<div class="card list">${r.entries.map(ledgerRow).join('')}</div>` : '<p class="muted sm">لا توجد حركات مسجّلة هذا الشهر.</p>'}
+    <div class="card"><h3 class="card-h">إيصالات الاشتراكات (${r.receipts.length})</h3>${r.receipts.slice().sort((a, b) => b.at - a.at).slice(0, 15).map((x) => { const sb = S.ix().sub.get(x.subId); return `<div class="li"><span class="dot ${x.kind === 'cancel' ? 'bad' : 'ok'}"></span><div class="grow"><b>${esc(sb?.name || '—')}${x.kind === 'cancel' ? ' (إلغاء)' : ''}</b><small>${esc(x.by || 'غير معروف')} · ${dt(x.at)}</small></div><b class="${x.kind === 'cancel' ? 'bad' : ''}">${money(x.amount)}</b></div>`; }).join('') || '<p class="muted sm">لا توجد إيصالات.</p>'}</div>
+  </main>`;
+  return { tab: 'more', html };
+}
+export function party({ id }) {
+  const p = S.live('parties').find((x) => x.id === id);
+  if (!p) return notFound();
+  const bal = S.partyBalance(id); const list = S.ledgerOf(id);
+  const html = appbar({ title: p.name, sub: 'قائمة خاصة', actions: abBtn('party-del', 'trash', 'حذف القائمة', `data-id="${id}"`) }) + `
+  <main class="body">
+    <div class="card books-sum"><div class="net ${bal > 0 ? 'bad' : 'ok'}"><small>${bal >= 0 ? 'المطلوب منك' : 'دفعت زيادة'}</small><b>${money(Math.abs(bal))}</b></div>
+      <div class="btn-row"><button class="btn soft" data-act="ledger-add" data-kind="owe" data-party="${id}">${icon('plus')}تسجيل مطلوب</button><button class="btn primary" data-act="ledger-add" data-kind="out" data-party="${id}">${icon('check')}تسديد</button></div></div>
+    ${list.length ? `<div class="card list">${list.map(ledgerRow).join('')}</div>` : '<p class="muted sm">لا توجد حركات في هذه القائمة.</p>'}
+  </main>`;
+  return { tab: 'more', html };
 }
 
 /* ───────── الملاحظات ───────── */
@@ -357,6 +424,8 @@ export function more() {
       ${setRow('wallet', 'سعر الأمبير الافتراضي', st.pricePerAmp > 0 ? money(st.pricePerAmp) : 'غير محدد', 'set-price')}
       ${setRow('hash', 'العملة', esc(st.currency), 'set-currency')}
     </div>
+    ${secH('حساباتي')}
+    <div class="card list">${setRow('wallet', 'الواردات والصادرات', 'مصروفات المولدة وقوائم الجهات وتقرير الشهر', 'go', 'data-to="/books"')}</div>
     ${secH('الهيكل')}
     <div class="card list">
       ${gens.map((g) => `<a class="set" href="#/gen/${g.id}">${icon('gen', 'set-ic')}<div class="grow"><b>${esc(g.name)}</b><small>${S.subsOfGen(g.id).length} مشترك</small></div>${icon('next', 'chev')}</a>`).join('')}
@@ -408,6 +477,6 @@ export function importView() {
 }
 
 export const routes = {
-  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView,
+  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView, books, party,
 };
 export { ymAdd, ymParse };
