@@ -15,8 +15,6 @@ cat > "$RES/values/ic_launcher_background.xml" <<'X'
 X
 # splash
 for f in $(find "$RES" -name 'splash.png'); do cp branding/splash.png "$f"; done
-# RTL + name
-sed -i 's/<application/<application android:supportsRtl="true"/' $A/app/src/main/AndroidManifest.xml || true
 # stable signing with committed debug keystore
 cp branding/debug.keystore $A/app/debug.keystore
 python3 - <<'P'
