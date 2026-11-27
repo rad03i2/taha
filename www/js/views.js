@@ -1,0 +1,400 @@
+// الشاشات: كل دالة تعيد { html, tab } ويُركَّب الناتج في #view
+import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, MONTHS, timeAgo, normDigits } from './util.js';
+import * as S from './store.js';
+import { icon, money, moneyShort, ring, bar, empty, chip } from './ui.js';
+
+export const ui = {
+  ym: ymNow(), phase: {}, q: '', filter: 'all', gfilter: 'all', year: new Date().getFullYear(),
+  notesTab: 'open', limit: 60,
+};
+export const resetViewState = () => { ui.q = ''; ui.filter = 'all'; ui.limit = 60; };
+
+const HUES = [212, 160, 28, 280, 340, 190, 100, 250];
+export const avatar = (name) => {
+  const ch = [...String(name || '؟').replace(/^ال/, '').trim()][0] || '؟';
+  const h = HUES[(String(name || '').charCodeAt(0) || 0) % HUES.length];
+  return `<span class="av" style="--h:${h}">${esc(ch)}</span>`;
+};
+export const statusChip = (sub) => { const s = S.statusOf(sub); return chip(s.k, s.text); };
+export const NOTE_TYPES = {
+  broken: { t: 'واير مقطوع', ic: 'cut', c: 'bad' },
+  float: { t: 'جوزة طافية', ic: 'alert', c: 'warn' },
+  faulty: { t: 'جوزة عاطلة', ic: 'alert', c: 'bad' },
+  visit: { t: 'متابعة / زيارة', ic: 'user', c: 'info' },
+  other: { t: 'ملاحظة', ic: 'note', c: 'info' },
+};
+export const CONN_STATES = { ok: 'سليمة', float: 'طافية', faulty: 'عاطلة', broken: 'مقطوع' };
+
+const appbar = ({ title, sub = '', back = true, actions = '', extra = '' }) => `
+<header class="appbar">
+  <div class="ab-row">
+    ${back ? `<button class="ab-btn" data-act="back" aria-label="رجوع">${icon('back')}</button>` : `<div class="brand">${icon('bolt')}</div>`}
+    <div class="ab-title"><h1>${esc(title)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>
+    <div class="ab-actions">${actions}</div>
+  </div>
+  ${extra}
+</header>`;
+const abBtn = (act, ic, label, extra = '') => `<button class="ab-btn" data-act="${act}" ${extra} aria-label="${esc(label)}">${icon(ic)}</button>`;
+const tile = (ic, label, val) => `<div class="tile">${icon(ic)}<b>${val}</b><small>${label}</small></div>`;
+const secH = (t, right = '') => `<div class="sec-h"><h2>${t}</h2>${right}</div>`;
+const notFound = () => ({ tab: 'home', html: appbar({ title: 'غير موجود' }) + `<main class="body">${empty('info', 'هذا العنصر غير موجود', 'ربما حُذف.', '<a class="btn primary" href="#/home">الرئيسية</a>')}</main>` });
+const noPriceBanner = () => (S.generators().every((g) => !(g.price > 0)) && !(S.settings().pricePerAmp > 0)
+  ? `<button class="banner warn" data-act="set-price">${icon('alert')}<span>سعر الأمبير غير محدد، فلن تُحسب المبالغ. اضغط لتحديده.</span></button>` : '');
+
+/* ───────── الرئيسية ───────── */
+function onboarding() {
+  return `
+<div class="welcome">
+  <div class="w-logo">${icon('bolt')}</div>
+  <h1>حسابات المولدة</h1>
+  <p>سجّل المشتركين والأمبيرات والأشهر والديون في مكان واحد، بدل الدفتر الورقي.</p>
+  <form class="card w-form" data-form="onboard">
+    <label class="field"><span>اسم المولدة</span><input name="name" value="المولدة 1" required autocomplete="off"></label>
+    <div class="two">
+      <label class="field"><span>سعر الأمبير (شهريًا)</span><input name="price" inputmode="decimal" placeholder="مثال: 7000" autocomplete="off"></label>
+      <label class="field"><span>العملة</span><input name="currency" value="د.ع" autocomplete="off"></label>
+    </div>
+    <label class="field"><span>اسمك (يظهر في سجل النشاط)</span><input name="user" placeholder="اختياري" autocomplete="off"></label>
+    <button class="btn primary block lg" type="submit">ابدأ الاستخدام</button>
+  </form>
+  <button class="btn ghost block" data-act="seed-demo">تجربة ببيانات تجريبية</button>
+</div>`;
+}
+
+const genCard = (g, ym) => {
+  const s = S.stats(S.subsOfGen(g.id), ym);
+  const pct = s.expected ? s.collected / s.expected : 0;
+  return `<a class="card gen" href="#/gen/${g.id}">
+    <div class="gen-ic">${icon('gen')}</div>
+    <div class="grow">
+      <b>${esc(g.name)}</b>
+      <small>${s.count} مشترك · ${fmtNum(s.amps)} أمبير</small>
+      ${bar(pct, pct >= 1 ? 'ok' : '')}
+      <div class="gen-foot"><span>محصّل ${Math.round(pct * 100)}%</span><span class="${s.debt ? 'bad' : 'ok'}">${s.debt ? 'ديون ' + moneyShort(s.debt) : 'لا ديون'}</span></div>
+    </div>${icon('next', 'chev')}</a>`;
+};
+
+export function home() {
+  const gens = S.generators();
+  if (!gens.length) return { tab: 'home', html: onboarding(), bare: true };
+  const ym = ui.ym;
+  const st = S.stats(S.allSubs(), ym);
+  const pct = st.expected ? st.collected / st.expected : 0;
+  const hero = `
+  <div class="hero">
+    <div class="ymsw">
+      <button data-act="ym" data-d="-1" aria-label="الشهر السابق">${icon('back')}</button>
+      <span>${ymLabel(ym)}</span>
+      <button data-act="ym" data-d="1" aria-label="الشهر التالي">${icon('next')}</button>
+    </div>
+    <div class="hero-main">
+      ${ring(pct, 92)}
+      <div class="hm-t"><small>المحصّل في الشهر</small><strong>${money(st.collected)}</strong><small>من أصل ${money(st.expected)}</small></div>
+    </div>
+    <div class="tiles">${tile('users', 'مشترك', st.count)}${tile('bolt', 'أمبير', fmtNum(st.amps))}${tile('wallet', 'ديون', moneyShort(st.debt))}</div>
+  </div>`;
+  const log = S.raw().log.slice(0, 5);
+  const html = appbar({ title: 'حسابات المولدة', back: false, actions: abBtn('search', 'search', 'بحث'), extra: hero }) + `
+  <main class="body">
+    ${noPriceBanner()}
+    ${secH('المولدات', `<button class="link" data-act="add-gen">${icon('plus')}مولدة جديدة</button>`)}
+    ${gens.map((g) => genCard(g, ym)).join('')}
+    ${secH('إجراءات سريعة')}
+    <div class="quick">
+      <button class="q" data-act="add-sub">${icon('plus')}<span>مشترك جديد</span></button>
+      <button class="q" data-act="pay-pick">${icon('check')}<span>تسجيل دفعة</span></button>
+      <button class="q" data-act="add-note">${icon('note')}<span>ملاحظة</span></button>
+      <button class="q" data-act="go" data-to="/import">${icon('list')}<span>إدخال سريع</span></button>
+    </div>
+    ${log.length ? secH('آخر النشاط', `<a class="link" href="#/log">الكل</a>`) + `<div class="card list">${log.map((l) => `<div class="li"><span class="dot"></span><div class="grow"><b>${esc(l.text)}</b><small>${timeAgo(l.at)}${l.by ? ' · ' + esc(l.by) : ''}</small></div></div>`).join('')}</div>` : ''}
+  </main>`;
+  return { tab: 'home', html };
+}
+
+/* ───────── المولدة ───────── */
+export function generator({ id }) {
+  const g = S.ix().gen.get(id);
+  if (!g) return notFound();
+  const phases = S.phasesOf(id);
+  const pid = phases.find((p) => p.id === ui.phase[id])?.id || phases[0]?.id;
+  const ym = ymNow();
+  const seg = `<div class="seg">${phases.map((p) => `<button class="seg-b ${p.id === pid ? 'on' : ''}" data-act="phase" data-gen="${id}" data-id="${p.id}">${esc(p.name)}<small>${S.subsOfPhase(p.id).length}</small></button>`).join('')}</div>`;
+  const cabs = S.cabinetsOf(pid);
+  const ps = S.stats(S.subsOfPhase(pid), ym);
+  const price = S.priceOfGen(id);
+  const html = appbar({
+    title: g.name, sub: price > 0 ? `سعر الأمبير ${money(price)}` : 'سعر الأمبير غير محدد',
+    actions: abBtn('gen-menu', 'more', 'خيارات', `data-id="${id}"`), extra: seg,
+  }) + `
+  <main class="body">
+    <div class="stats3">
+      <div><b>${ps.count}</b><small>مشترك</small></div>
+      <div><b>${fmtNum(ps.amps)}</b><small>أمبير</small></div>
+      <div><b>${ps.dueCount ? Math.round((ps.paidCount / ps.dueCount) * 100) : 0}%</b><small>مسدد هذا الشهر</small></div>
+    </div>
+    ${secH('الكابينات', `<button class="link" data-act="add-cab" data-id="${pid}">${icon('plus')}كابينة</button>`)}
+    ${cabs.length ? cabs.map((c) => cabCard(c, ym)).join('') : empty('box', 'لا توجد كابينات بعد', `أضف أول كابينة تحت ${phases.find((p) => p.id === pid)?.name || 'الفيز'}.`, `<button class="btn primary" data-act="add-cab" data-id="${pid}">${icon('plus')}إضافة كابينة</button>`)}
+  </main>`;
+  return { tab: 'home', html };
+}
+const cabCard = (c, ym) => {
+  const s = S.stats(S.subsOfCab(c.id), ym);
+  const pct = s.dueCount ? s.paidCount / s.dueCount : 0;
+  return `<a class="card cab" href="#/cab/${c.id}">
+    <div class="cab-ic">${icon('box')}</div>
+    <div class="grow"><b>${esc(c.name)}</b><small>${s.count} مشترك · ${fmtNum(s.amps)} أمبير</small>${bar(pct, pct >= 1 ? 'ok' : '')}</div>
+    <div class="cab-side">${s.debt ? `<span class="bad">${moneyShort(s.debt)}</span><small>ديون</small>` : `<span class="ok">${icon('check')}</span><small>${s.count ? 'مسدد' : 'فارغة'}</small>`}</div>
+  </a>`;
+};
+
+/* ───────── الكابينة ───────── */
+const matchQ = (sub, conn, q) => {
+  if (!q) return true;
+  const n = normDigits(q).trim();
+  return sub.name.includes(q.trim()) || (/^\d+$/.test(n) && String(conn.no) === n);
+};
+const passFilter = (sub, f) => f === 'all' || S.statusOf(sub).k === f;
+
+export function connCard(conn, subs) {
+  const st = conn.state && conn.state !== 'ok' ? `<span class="chip warn sm">${CONN_STATES[conn.state]}</span>` : '';
+  return `<div class="conn">
+    <div class="conn-head">
+      <div class="no"><small>جوزة</small>${conn.no}</div>
+      <div class="grow"><b>${subs.length > 1 ? `${subs.length} مشتركين على الجوزة` : 'جوزة مستقلة'}</b>${st}</div>
+      <button class="mini" data-act="add-partner" data-conn="${conn.id}">${icon('plus')}شريك</button>
+      <button class="mini sq" data-act="conn-menu" data-id="${conn.id}" aria-label="خيارات">${icon('more')}</button>
+    </div>
+    ${subs.map((s) => subRow(s, true)).join('')}
+  </div>`;
+}
+export function subRow(s, quick = false, path = false) {
+  const st = S.statusOf(s);
+  const due = S.dueOf(s);
+  const pay = quick && st.k !== 'off'
+    ? (st.k === 'paid' ? `<span class="pay-done" aria-label="مسدد">${icon('check')}</span>` : `<button class="pay-btn" data-act="quick-pay" data-id="${s.id}" aria-label="تسديد">${icon('check')}</button>`)
+    : '';
+  return `<div class="srow" data-act="open-sub" data-id="${s.id}">
+    ${avatar(s.name)}
+    <div class="grow"><b>${esc(s.name)}</b><small>${path ? esc(S.pathText(s)) + ' · ' : ''}${fmtNum(s.amps)} أمبير${due ? ' · ' + money(due) : ''}</small></div>
+    ${chip(st.k, st.text)}${pay}
+  </div>`;
+}
+export function cabinetList(cabId) {
+  const q = ui.q; const f = ui.filter;
+  const rows = S.connsOf(cabId).map((c) => ({ c, subs: S.subsOfConn(c.id) })).filter(({ c, subs }) => subs.some((s) => matchQ(s, c, q) && passFilter(s, f)));
+  if (!rows.length) {
+    const none = !S.subsOfCab(cabId).length;
+    return empty(none ? 'users' : 'search', none ? 'لا يوجد مشتركون' : 'لا نتائج', none ? 'أضف أول مشترك في هذه الكابينة.' : 'جرّب كلمة أخرى أو غيّر التصفية.', none ? `<button class="btn primary" data-act="add-sub" data-cab="${cabId}">${icon('plus')}إضافة مشترك</button>` : '');
+  }
+  return rows.map(({ c, subs }) => connCard(c, subs)).join('');
+}
+export const FILTERS = [['all', 'الكل'], ['due', 'مستحق'], ['debt', 'متأخر'], ['paid', 'مسدد']];
+export const filterChips = (cur) => `<div class="chips">${FILTERS.map(([k, t]) => `<button class="fc ${cur === k ? 'on' : ''}" data-act="filter" data-k="${k}">${t}</button>`).join('')}</div>`;
+
+export function cabinet({ id }) {
+  const cab = S.ix().cab.get(id);
+  if (!cab) return notFound();
+  const phase = S.ix().phase.get(cab.phaseId); const gen = S.ix().gen.get(phase.generatorId);
+  const subs = S.subsOfCab(id); const st = S.stats(subs);
+  const extra = `<div class="stats4">
+    <div><b>${st.count}</b><small>مشترك</small></div><div><b>${fmtNum(st.amps)}</b><small>أمبير</small></div>
+    <div><b>${st.paidCount}/${st.dueCount}</b><small>مسدد</small></div><div class="${st.debt ? 'bad' : ''}"><b>${moneyShort(st.debt)}</b><small>ديون</small></div></div>`;
+  const html = appbar({ title: cab.name, sub: `${gen.name} › ${phase.name}`, actions: abBtn('cab-menu', 'more', 'خيارات', `data-id="${id}"`), extra }) + `
+  <div class="toolbar">
+    <label class="search">${icon('search')}<input id="q" type="search" placeholder="ابحث بالاسم أو رقم الجوزة" value="${esc(ui.q)}" autocomplete="off"></label>
+    ${filterChips(ui.filter)}
+  </div>
+  <main class="body" id="list" data-cab="${id}">${cabinetList(id)}</main>
+  <button class="fab" data-act="add-sub" data-cab="${id}">${icon('plus')}<span>مشترك</span></button>`;
+  return { tab: 'home', html, live: 'cab' };
+}
+
+/* ───────── المشترك ───────── */
+export function subscriber({ id }) {
+  const s = S.ix().sub.get(id);
+  if (!s) return notFound();
+  const { conn, cab, phase, gen } = S.pathOf(s);
+  const d = S.debtOf(s); const due = S.dueOf(s); const st = S.statusOf(s);
+  const now = ymNow(); const year = ui.year;
+  const tiles = Array.from({ length: 12 }, (_, i) => {
+    const ym = `${year}-${String(i + 1).padStart(2, '0')}`;
+    const k = S.monthState(s, ym);
+    return `<button class="mt ${k} ${ym === now ? 'cur' : ''}" data-act="tile" data-id="${id}" data-ym="${ym}" ${s.active === false ? 'disabled' : ''}>
+      <b>${i + 1}</b><small>${MONTHS[i]}</small>${k === 'paid' ? icon('check', 'mt-ic') : ''}</button>`;
+  }).join('');
+  const debts = (S.ix().debtsBySub.get(id) || []).slice().sort((a, b) => b.at - a.at);
+  const notes = S.live('notes').filter((n) => n.subId === id || (n.connId && n.connId === s.connectionId)).sort((a, b) => b.createdAt - a.createdAt);
+  const paid = Object.values(S.raw().records).filter((r) => r.subId === id && !r.deleted).sort((a, b) => b.at - a.at).slice(0, 6);
+  const partners = S.subsOfConn(s.connectionId).filter((x) => x.id !== id);
+  const extra = `<div class="sub-hero">
+    <div class="pill"><small>جوزة</small><b>${conn?.no ?? '—'}</b></div>
+    <div class="pill"><small>الأمبيرات</small><b>${fmtNum(s.amps)}</b></div>
+    <div class="pill"><small>الحالة</small><b>${esc(st.text)}</b></div>
+    ${s.phone ? `<a class="call" href="tel:${esc(s.phone)}" aria-label="اتصال">${icon('phone')}</a>` : ''}
+  </div>`;
+  const html = appbar({ title: s.name, sub: S.pathText(s), actions: abBtn('edit-sub', 'edit', 'تعديل', `data-id="${id}"`) + abBtn('sub-menu', 'more', 'خيارات', `data-id="${id}"`), extra }) + `
+  <main class="body">
+    ${s.active === false ? `<div class="banner info">${icon('info')}<span>هذا المشترك موقوف، ولا تُحسب عليه أشهر.</span></div>` : ''}
+    <div class="card sum">
+      <div><small>الاشتراك الشهري</small><b>${due ? money(due) : '—'}</b></div>
+      <div class="${d.total ? 'bad' : 'ok'}"><small>إجمالي المتبقي</small><b>${money(d.total)}</b></div>
+      ${d.total ? `<div class="sum-sub grow2">${d.months.length ? `${d.months.length} أشهر غير مسددة = ${money(d.monthsAmount)}` : ''}${d.months.length && d.manual ? ' · ' : ''}${d.manual ? `دين مسجّل ${money(d.manual)}` : ''}</div>` : ''}
+      <button class="btn primary block lg grow2" data-act="pay" data-id="${id}" ${s.active === false ? 'disabled' : ''}>${icon('check')}تسجيل دفعة</button>
+    </div>
+    <div class="card">
+      <div class="yr"><button data-act="year" data-d="-1" aria-label="السنة السابقة">${icon('back')}</button><b>${year}</b><button data-act="year" data-d="1" aria-label="السنة التالية">${icon('next')}</button></div>
+      <div class="mgrid">${tiles}</div>
+      <div class="legend"><span><i class="lg paid"></i>مسدد</span><span><i class="lg unpaid"></i>غير مسدد</span><span><i class="lg future"></i>قادم</span><span><i class="lg before"></i>قبل البداية</span></div>
+      <p class="hint">اضغط على الشهر للتأشير أو للتراجع.</p>
+    </div>
+    ${partners.length ? `<div class="card"><h3 class="card-h">شركاء على نفس الجوزة</h3>${partners.map((p) => subRow(p)).join('')}</div>` : ''}
+    <div class="card">
+      <div class="card-hr"><h3 class="card-h">الديون المسجّلة</h3><b class="${d.manual ? 'bad' : 'ok'}">${money(d.manual)}</b></div>
+      ${debts.length ? debts.slice(0, 5).map((x) => `<div class="li"><span class="dot ${x.kind === 'debt' ? 'bad' : 'ok'}"></span><div class="grow"><b>${x.kind === 'debt' ? 'دين' : 'تسديد'} ${money(x.amount)}</b><small>${esc(x.note || '')} ${timeAgo(x.at)}</small></div></div>`).join('') : '<p class="muted sm">لا توجد ديون مسجّلة.</p>'}
+      <div class="btn-row"><button class="btn soft grow" data-act="add-debt" data-id="${id}">${icon('plus')}تسجيل دين</button>${d.manual ? `<button class="btn soft grow" data-act="pay-debt" data-id="${id}">${icon('check')}تسديد دين</button>` : ''}</div>
+    </div>
+    <div class="card">
+      <div class="card-hr"><h3 class="card-h">الملاحظات</h3><button class="link" data-act="add-note" data-id="${id}">${icon('plus')}ملاحظة</button></div>
+      ${notes.length ? notes.map(noteRow).join('') : '<p class="muted sm">لا توجد ملاحظات.</p>'}
+    </div>
+    ${paid.length ? `<div class="card"><h3 class="card-h">آخر الدفعات</h3>${paid.map((r) => `<div class="li"><span class="dot ok"></span><div class="grow"><b>${ymLabel(r.ym)}</b><small>${new Date(r.at).toLocaleDateString('en-GB')}${r.by ? ' · ' + esc(r.by) : ''}</small></div><b>${money(r.paid)}</b></div>`).join('')}</div>` : ''}
+  </main>`;
+  return { tab: 'home', html };
+}
+
+/* ───────── الملاحظات ───────── */
+const noteRow = (n) => {
+  const t = NOTE_TYPES[n.type] || NOTE_TYPES.other;
+  let where = '';
+  if (n.subId) { const s = S.ix().sub.get(n.subId); if (s) where = `${s.name}`; }
+  else if (n.connId) { const c = S.ix().conn.get(n.connId); if (c) where = `جوزة ${c.no} · ${S.ix().cab.get(c.cabinetId)?.name || ''}`; }
+  return `<div class="note ${n.done ? 'done' : ''}">
+    <span class="n-ic ${t.c}">${icon(t.ic)}</span>
+    <div class="grow"><b>${esc(t.t)}</b><p>${esc(n.text)}</p><small>${where ? esc(where) + ' · ' : ''}${timeAgo(n.createdAt)}</small></div>
+    <div class="n-act"><button class="mini sq" data-act="note-done" data-id="${n.id}" aria-label="${n.done ? 'إعادة فتح' : 'تم الحل'}">${icon(n.done ? 'undo' : 'check')}</button><button class="mini sq" data-act="note-del" data-id="${n.id}" aria-label="حذف">${icon('trash')}</button></div>
+  </div>`;
+};
+export function notes() {
+  const all = S.live('notes').sort((a, b) => b.createdAt - a.createdAt);
+  const open = all.filter((n) => !n.done); const done = all.filter((n) => n.done);
+  const list = ui.notesTab === 'open' ? open : done;
+  const html = appbar({ title: 'الملاحظات', back: false, sub: `${open.length} مفتوحة` }) + `
+  <div class="toolbar"><div class="seg light"><button class="seg-b ${ui.notesTab === 'open' ? 'on' : ''}" data-act="notes-tab" data-k="open">مفتوحة<small>${open.length}</small></button><button class="seg-b ${ui.notesTab === 'done' ? 'on' : ''}" data-act="notes-tab" data-k="done">منتهية<small>${done.length}</small></button></div></div>
+  <main class="body">${list.length ? `<div class="card list">${list.map(noteRow).join('')}</div>` : empty('note', ui.notesTab === 'open' ? 'لا توجد ملاحظات مفتوحة' : 'لا توجد ملاحظات منتهية', 'سجّل الأعطال والمتابعات: واير مقطوع، جوزة طافية…')}</main>
+  <button class="fab" data-act="add-note">${icon('plus')}<span>ملاحظة</span></button>`;
+  return { tab: 'notes', html };
+}
+
+/* ───────── المشتركون ───────── */
+const genChips = () => {
+  const gens = S.generators();
+  if (gens.length < 2) return '';
+  return `<div class="chips">${[['all', 'كل المولدات'], ...gens.map((g) => [g.id, g.name])].map(([k, t]) => `<button class="fc ${ui.gfilter === k ? 'on' : ''}" data-act="gfilter" data-k="${k}">${esc(t)}</button>`).join('')}</div>`;
+};
+export function subsList() {
+  const q = ui.q.trim(); const n = normDigits(q);
+  let list = S.allSubs();
+  if (ui.gfilter !== 'all') list = list.filter((s) => S.pathOf(s).gen?.id === ui.gfilter);
+  list = list.filter((s) => (!q || s.name.includes(q) || (/^\d+$/.test(n) && String(S.pathOf(s).conn?.no) === n)) && passFilter(s, ui.filter));
+  list.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+  const shown = list.slice(0, ui.limit);
+  if (!list.length) return empty('search', 'لا نتائج', 'غيّر البحث أو التصفية.');
+  return `<div class="card list">${shown.map((s) => subRow(s, false, true)).join('')}</div>${list.length > shown.length ? `<button class="btn ghost block" data-act="more-subs">عرض المزيد (${list.length - shown.length})</button>` : ''}`;
+}
+export function subs() {
+  const html = appbar({ title: 'المشتركون', back: false, sub: `${S.allSubs().length} مشترك`, actions: abBtn('add-sub', 'plus', 'مشترك جديد') }) + `
+  <div class="toolbar">
+    <label class="search">${icon('search')}<input id="q" type="search" placeholder="ابحث بالاسم أو رقم الجوزة" value="${esc(ui.q)}" autocomplete="off"></label>
+    ${genChips()}${filterChips(ui.filter)}
+  </div>
+  <main class="body" id="list">${subsList()}</main>`;
+  return { tab: 'subs', html, live: 'subs' };
+}
+
+/* ───────── الديون ───────── */
+export function debts() {
+  let rows = S.allSubs().map((s) => ({ s, d: S.debtOf(s) })).filter((r) => r.d.total > 0);
+  if (ui.gfilter !== 'all') rows = rows.filter((r) => S.pathOf(r.s).gen?.id === ui.gfilter);
+  rows.sort((a, b) => b.d.total - a.d.total);
+  const tot = rows.reduce((t, r) => t + r.d.total, 0);
+  const man = rows.reduce((t, r) => t + r.d.manual, 0);
+  const mon = tot - man;
+  const extra = `<div class="hero slim"><div class="hero-main"><div class="hm-t"><small>إجمالي المتبقي على المشتركين</small><strong>${money(tot)}</strong></div></div>
+    <div class="tiles two"><div class="tile"><small>أشهر غير مسددة</small><b>${moneyShort(mon)}</b></div><div class="tile"><small>ديون مسجّلة</small><b>${moneyShort(man)}</b></div></div></div>`;
+  const html = appbar({ title: 'الديون', back: false, sub: `${rows.length} مشترك عليهم متبقي`, actions: abBtn('add-debt', 'plus', 'تسجيل دين'), extra }) + `
+  <div class="toolbar">${genChips() || ''}</div>
+  <main class="body">${rows.length ? `<div class="card list">${rows.map(({ s, d }) => `<div class="srow" data-act="open-sub" data-id="${s.id}">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${esc(S.pathText(s))}${d.months.length ? ` · ${d.months.length} أشهر` : ''}${d.manual ? ' · دين مسجّل' : ''}</small></div><b class="bad">${money(d.total)}</b></div>`).join('')}</div>` : empty('shield', 'لا توجد ديون', 'كل المشتركين مسددون. أحسنت!')}</main>`;
+  return { tab: 'debts', html };
+}
+
+/* ───────── المزيد والإعدادات ───────── */
+const setRow = (ic, t, sub, act, extra = '') => `<button class="set" data-act="${act}" ${extra}>${icon(ic, 'set-ic')}<div class="grow"><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div>${icon('next', 'chev')}</button>`;
+export function more() {
+  const st = S.settings();
+  const gens = S.generators();
+  const html = appbar({ title: 'المزيد', back: false, sub: 'الإعدادات والبيانات' }) + `
+  <main class="body">
+    ${secH('الحساب والتسعير')}
+    <div class="card list">
+      ${setRow('user', 'اسمك', esc(st.user || 'غير محدد'), 'set-user')}
+      ${setRow('wallet', 'سعر الأمبير الافتراضي', st.pricePerAmp > 0 ? money(st.pricePerAmp) : 'غير محدد', 'set-price')}
+      ${setRow('hash', 'العملة', esc(st.currency), 'set-currency')}
+    </div>
+    ${secH('الهيكل')}
+    <div class="card list">
+      ${gens.map((g) => `<a class="set" href="#/gen/${g.id}">${icon('gen', 'set-ic')}<div class="grow"><b>${esc(g.name)}</b><small>${S.subsOfGen(g.id).length} مشترك</small></div>${icon('next', 'chev')}</a>`).join('')}
+      ${setRow('plus', 'إضافة مولدة', '', 'add-gen')}
+    </div>
+    ${secH('العرض')}
+    <div class="card list">
+      ${setRow('hash', 'شكل الأرقام', st.digits === 'indic' ? 'هندية ٠١٢٣' : 'لاتينية 0123', 'toggle-digits')}
+      ${setRow('moon', 'المظهر', { auto: 'تلقائي', light: 'فاتح', dark: 'داكن' }[st.theme], 'cycle-theme')}
+    </div>
+    ${secH('البيانات')}
+    <div class="card list">
+      ${setRow('list', 'إدخال سريع من نص', 'انسخ الأسماء من الدفتر دفعة واحدة', 'go', 'data-to="/import"')}
+      ${setRow('upload', 'نسخة احتياطية (تصدير)', 'ملف JSON تحفظه أو ترسله', 'export')}
+      ${setRow('download', 'استعادة نسخة', 'استيراد ملف نسخة احتياطية', 'import-file')}
+      ${setRow('clock', 'سجل النشاط', 'من فعل ماذا ومتى', 'go', 'data-to="/log"')}
+      ${setRow('trash', 'مسح كل البيانات', '', 'wipe')}
+      ${gens.length ? '' : setRow('bolt', 'بيانات تجريبية', 'للتجربة فقط', 'seed-demo')}
+    </div>
+    ${secH('المزامنة السحابية')}
+    <div class="card sync">
+      <div class="sync-h">${icon('cloud')}<div><b>قريبًا: مزامنة بين 6 أجهزة</b><small>أي تغيير عند شخص يصل للبقية</small></div></div>
+      <p class="muted sm">التطبيق مبنيّ جاهزًا لها: لكل سجل معرّف فريد وتاريخ تعديل واسم من عدّله، والدفعات تُضاف ولا تُعدَّل.</p>
+      <small class="mono">جهاز: ${esc(S.raw().deviceId.slice(0, 8))}</small>
+    </div>
+    <p class="foot">حسابات المولدة · الإصدار 1.0</p>
+  </main>`;
+  return { tab: 'more', html };
+}
+
+export function log() {
+  const l = S.raw().log;
+  const html = appbar({ title: 'سجل النشاط', sub: `${l.length} عملية` }) + `<main class="body">${l.length ? `<div class="card list">${l.slice(0, 200).map((x) => `<div class="li"><span class="dot"></span><div class="grow"><b>${esc(x.text)}</b><small>${new Date(x.at).toLocaleString('en-GB')}${x.by ? ' · ' + esc(x.by) : ''}</small></div></div>`).join('')}</div>` : empty('clock', 'لا يوجد نشاط بعد', '')}</main>`;
+  return { tab: 'more', html };
+}
+
+/* ───────── الإدخال السريع ───────── */
+export function importView() {
+  const cabs = [];
+  for (const g of S.generators()) for (const p of S.phasesOf(g.id)) for (const c of S.cabinetsOf(p.id)) cabs.push({ g, p, c });
+  const html = appbar({ title: 'إدخال سريع', sub: 'انقل الدفتر دفعة واحدة' }) + `
+  <main class="body">
+    ${cabs.length ? `<form class="card" data-form="import">
+      <label class="field"><span>الكابينة</span><select name="cab">${cabs.map(({ g, p, c }) => `<option value="${c.id}">${esc(g.name)} › ${esc(p.name)} › ${esc(c.name)}</option>`).join('')}</select></label>
+      <label class="field"><span>الأسماء (سطر لكل مشترك)</span>
+        <textarea name="text" rows="9" id="imp-text" placeholder="26 أحمد صالح 6&#10;27 إبراهيم طه 4&#10;29 محمود علي 3&#10;29 حمد جاسم 2"></textarea></label>
+      <p class="hint">الصيغة: <b>رقم الجوزة</b> ثم <b>الاسم</b> ثم <b>الأمبيرات</b>. تكرار نفس الرقم يضيف شريكًا على نفس الجوزة.</p>
+      <div id="imp-prev" class="imp-prev"></div>
+      <button class="btn primary block lg" type="submit">استيراد</button>
+    </form>` : `<div class="card">${empty('box', 'أنشئ كابينة أولًا', 'يحتاج الإدخال السريع إلى كابينة.', '<a class="btn primary" href="#/home">الرئيسية</a>')}</div>`}
+  </main>`;
+  return { tab: 'more', html, live: 'import' };
+}
+
+export const routes = {
+  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView,
+};
+export { ymAdd, ymParse };

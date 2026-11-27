@@ -1,0 +1,16 @@
+{
+  "name": "generator-accounts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "حسابات المولدة — تطبيق إدارة اشتراكات المولدة",
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/cli": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/filesystem": "^7.0.0",
+    "@capacitor/share": "^7.0.0",
+    "@capacitor/status-bar": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0"
+  }
+}
