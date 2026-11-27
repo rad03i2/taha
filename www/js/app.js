@@ -3,7 +3,7 @@ import { debounce } from './util.js';
 import * as S from './store.js';
 import { applyDigits, closeSheet, sheetOpen, icon, toast } from './ui.js';
 import { nav } from './nav.js';
-import { routes, ui, resetViewState, cabinetList, subsList } from './views.js';
+import { routes, ui, resetViewState, cabinetList, subsList, loginView } from './views.js';
 import { actions, handleSubmit } from './forms.js';
 import * as SY from './sync.js';
 
@@ -24,7 +24,8 @@ let current = null;
 function renderTabs(active, hidden) {
   $tabs.hidden = hidden;
   $tabs.innerHTML = TABS.map(([k, t, ic, to]) => {
-    const badge = k === 'notes' && S.ix().notesOpen ? `<i class="badge">${S.ix().notesOpen}</i>` : '';
+    const nb = k === 'notes' ? S.ix().notesOpen : k === 'more' ? S.unread() : 0;
+    const badge = nb ? `<i class="badge">${nb}</i>` : '';
     return `<a class="tab ${k === active ? 'on' : ''}" href="#${to}"><span class="tab-ic">${icon(ic)}${badge}</span><span>${t}</span></a>`;
   }).join('');
   applyDigits($tabs);
@@ -35,8 +36,10 @@ function render(keepScroll) {
   const key = `${r.name}/${r.id || ''}`;
   const changed = key !== lastRoute;
   if (changed) { resetViewState(); lastRoute = key; }
-  const fn = routes[r.name] || routes.home;
+  const gate = SY.gateRequired();
+  const fn = gate ? loginView : routes[r.name] || routes.home;
   const y = keepScroll && !changed ? window.scrollY : 0;
+  if (!gate && r.name === 'log') S.clearUnread();
   const out = fn({ id: r.id });
   current = out;
   $view.innerHTML = out.html;
@@ -46,6 +49,7 @@ function render(keepScroll) {
   document.title = 'حسابات المولدة';
   if (changed) window.scrollTo(0, 0); else window.scrollTo(0, y);
   mountLive(out.live);
+  if (out.live === 'team' && !SY.teamList()) SY.loadTeam();
   applyTheme();
 }
 
@@ -81,14 +85,12 @@ function applyTheme() {
 }
 
 /* ───────── الأحداث ───────── */
-const ADMIN_ONLY = new Set(['add-gen', 'gen-menu', 'edit-gen', 'edit-phases', 'del-gen', 'add-cab', 'cab-menu', 'del-cab', 'add-sub', 'add-partner', 'edit-sub', 'del-sub', 'edit-conn', 'del-conn', 'add-conn', 'set-price', 'set-currency', 'wipe', 'import-file', 'seed-demo', 'sub-menu', 'conn-menu']);
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = actions[el.dataset.act];
   if (!fn) return;
   e.preventDefault();
-  if (!SY.isAdmin() && ADMIN_ONLY.has(el.dataset.act)) return toast('هذه العملية للمدير فقط');
   if (el.dataset.close && sheetOpen()) { const snap = { dataset: { ...el.dataset } }; closeSheet(); setTimeout(() => fn(snap), 230); return; }
   fn(el, e);
 });
@@ -134,7 +136,7 @@ function wireNative() {
   await S.load();
   if (!location.hash) history.replaceState(null, '', '#/home');
   wireNative();
-  SY.onStatus(() => { if (parse().name === 'more') render(true); });
+  SY.onStatus(() => { const n = parse().name; if (n === 'more' || n === 'team' || SY.gateRequired() || document.querySelector('.welcome')) render(true); });
   render(false);
   SY.start();
   const sp = document.getElementById('splash');

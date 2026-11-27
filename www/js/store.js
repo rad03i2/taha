@@ -514,10 +514,14 @@ export function dirtyItems(limit = 400) {
   return out.slice(0, limit);
 }
 export function markPushed(items) { items.forEach((i) => { db.sync.pushed[i.key] = i.ts; }); scheduleSave(); }
-export function setSyncCfg(cfg) { db.sync.cfg = cfg; if (!cfg) { db.sync.pushed = {}; db.sync.lastPull = ''; } scheduleSave(); }
+export function setSyncCfg(cfg) { db.sync.cfg = cfg; if (!cfg) { db.sync.pushed = {}; db.sync.lastPull = ''; } changed(); }
 export function setLastPull(c) { db.sync.lastPull = c; scheduleSave(); }
-export function applyRemote(items) {
-  let n = 0;
+export const unread = () => db.unread || 0;
+export function addUnread(k) { db.unread = (db.unread || 0) + k; scheduleSave(); listeners.forEach((f) => f()); }
+export function clearUnread() { if (db.unread) { db.unread = 0; scheduleSave(); } }
+export function applyRemote(items, { notify = false } = {}) {
+  let n = 0; const fresh = [];
+  const me = db.settings.user || '';
   for (const { kind, data } of items) {
     if (!data || !data.id) continue;
     const ts = tsOf(data);
@@ -529,7 +533,7 @@ export function applyRemote(items) {
       if (!cur || ts > tsOf(cur)) { db.records[data.id] = data; n++; }
     } else if (SYNC_KINDS.includes(kind)) {
       const arr = db[kind]; const i = arr.findIndex((x) => x.id === data.id);
-      if (i < 0) { arr.push(data); n++; } else if (ts > tsOf(arr[i])) { arr[i] = data; n++; }
+      if (i < 0) { arr.push(data); n++; if (notify && kind === 'log' && data.by && data.by !== me) fresh.push(data); } else if (ts > tsOf(arr[i])) { arr[i] = data; n++; }
     }
   }
   if (n) {
@@ -537,5 +541,5 @@ export function applyRemote(items) {
     if (db.log.length > 400) db.log.length = 400;
     changed();
   } else scheduleSave();
-  return n;
+  return { n, fresh };
 }

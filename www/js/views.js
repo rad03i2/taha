@@ -399,18 +399,43 @@ export function debts() {
 const setRow = (ic, t, sub, act, extra = '') => `<button class="set" data-act="${act}" ${extra}>${icon(ic, 'set-ic')}<div class="grow"><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div>${icon('next', 'chev')}</button>`;
 function syncCard() {
   const dev = `<small class="mono">جهاز: ${esc(S.raw().deviceId.slice(0, 8))}</small>`;
-  if (!SY.available()) return `<div class="card sync"><div class="sync-h">${icon('cloud')}<div><b>المزامنة غير مفعّلة بعد</b><small>ستُفعَّل بعد ربط الخدمة السحابية</small></div></div>${dev}</div>`;
-  const c = SY.cfg(); const s = SY.status();
-  if (!c) return `<div class="card sync">
-    <div class="sync-h">${icon('cloud')}<div><b>مزامنة بين الأجهزة</b><small>أي تغيير عند شخص يصل للبقية</small></div></div>
-    <p class="muted sm">أنشئ مساحة مشتركة لمولدتك وشارك رمز الدعوة مع فريقك، أو انضم برمز وصلك.</p>
-    <div class="btn-row"><button class="btn primary" data-act="sync-create">${icon('plus')}إنشاء مساحة</button><button class="btn soft" data-act="sync-join">${icon('users')}انضمام برمز</button></div>${dev}</div>`;
+  if (!SY.available()) return `<div class="card sync"><div class="sync-h">${icon('cloud')}<div><b>المزامنة غير مفعّلة</b><small>التطبيق يعمل على هذا الجهاز فقط</small></div></div>${dev}</div>`;
+  const u = SY.user(); const s = SY.status();
+  if (!u) return '';
   const line = s.state === 'err' ? `<span class="chip debt">${esc(s.err)}</span>` : s.state === 'sync' ? '<span class="chip">جارٍ المزامنة…</span>' : s.at ? `<span class="chip paid">متزامن · ${timeAgo(s.at)}</span>` : '<span class="chip">بانتظار المزامنة</span>';
   return `<div class="card sync">
-    <div class="sync-h">${icon('cloud')}<div><b>متصل بالمساحة المشتركة</b><small>دورك: ${c.role === 'admin' ? 'مدير' : 'جابٍ (تسجيل الدفعات فقط)'}</small></div></div>
+    <div class="sync-h">${icon('cloud')}<div><b>${esc(u.display)}</b><small>${u.role === 'manager' ? 'مدير' : 'مشرف'} · @${esc(u.username)}</small></div></div>
     <div class="sync-st">${line}</div>
-    <div class="btn-row"><button class="btn soft" data-act="sync-now">${icon('clock')}مزامنة الآن</button>${c.role === 'admin' ? `<button class="btn soft" data-act="sync-codes">${icon('users')}رموز الدعوة</button>` : ''}</div>
-    <button class="btn danger-ghost block" data-act="sync-leave">فصل هذا الجهاز</button>${dev}</div>`;
+    <div class="btn-row"><button class="btn soft" data-act="sync-now">${icon('clock')}مزامنة الآن</button><button class="btn soft" data-act="logout">تسجيل الخروج</button></div>${dev}</div>`;
+}
+
+export function loginView() {
+  const html = `
+<div class="welcome">
+  <div class="w-logo">${icon('bolt')}</div>
+  <h1>حسابات المولدة</h1>
+  <p>سجّل الدخول بالحساب الذي أنشأه لك المدير.</p>
+  <form class="card w-form" data-form="login">
+    <label class="field"><span>اسم المستخدم</span><input name="username" dir="ltr" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus></label>
+    <label class="field"><span>كلمة المرور</span><input name="password" type="password" dir="ltr" autocomplete="current-password" required></label>
+    <button class="btn primary block lg" type="submit">دخول</button>
+  </form>
+  <button class="btn ghost block" data-act="setup-open">أنا المدير وأريد إنشاء المساحة (أول مرة)</button>
+</div>`;
+  return { tab: 'home', html, bare: true };
+}
+
+const userRow = (x) => `<div class="li"><span class="dot ${x.active ? 'ok' : 'bad'}"></span><div class="grow"><b>${esc(x.display)}</b><small>@${esc(x.username)} · ${x.role === 'manager' ? 'مدير' : x.active ? 'مشرف' : 'مشرف موقوف'}</small></div>${x.role === 'manager' ? '' : `<button class="mini sq" data-act="user-menu" data-id="${x.id}" aria-label="خيارات">${icon('more')}</button>`}</div>`;
+export function team() {
+  if (!SY.isManager()) return notFound();
+  const list = SY.teamList();
+  const html = appbar({ title: 'إدارة المشرفين', sub: 'للمدير فقط', actions: abBtn('user-add', 'plus', 'مشرف جديد') }) + `
+  <main class="body">
+    <div class="card"><p class="muted sm">المشرف يملك كل صلاحيات التطبيق ويرى نفس الشاشات، عدا هذه الشاشة. أنشئ له اسم مستخدم وكلمة مرور وسلّمها له.</p></div>
+    ${list ? `<div class="card list">${list.map(userRow).join('')}</div>` : '<p class="muted sm">جارٍ التحميل…</p>'}
+    <button class="btn primary block lg" data-act="user-add">${icon('plus')}مشرف جديد</button>
+  </main>`;
+  return { tab: 'more', html, live: 'team' };
 }
 
 export function more() {
@@ -420,10 +445,11 @@ export function more() {
   <main class="body">
     ${secH('الحساب والتسعير')}
     <div class="card list">
-      ${setRow('user', 'اسمك', esc(st.user || 'غير محدد'), 'set-user')}
+      ${SY.user() ? '' : setRow('user', 'اسمك', esc(st.user || 'غير محدد'), 'set-user')}
       ${setRow('wallet', 'سعر الأمبير الافتراضي', st.pricePerAmp > 0 ? money(st.pricePerAmp) : 'غير محدد', 'set-price')}
       ${setRow('hash', 'العملة', esc(st.currency), 'set-currency')}
     </div>
+    ${SY.isManager() && SY.user() ? `${secH('الفريق')}<div class="card list">${setRow('users', 'إدارة المشرفين', 'إنشاء حسابات المشرفين والتحكم بها', 'go', 'data-to="/team"')}</div>` : ''}
     ${secH('حساباتي')}
     <div class="card list">${setRow('wallet', 'الواردات والصادرات', 'مصروفات المولدة وقوائم الجهات وتقرير الشهر', 'go', 'data-to="/books"')}</div>
     ${secH('الهيكل')}
@@ -477,6 +503,6 @@ export function importView() {
 }
 
 export const routes = {
-  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView, books, party,
+  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView, books, party, team,
 };
 export { ymAdd, ymParse };

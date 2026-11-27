@@ -346,21 +346,6 @@ forms.import = (fd) => {
 };
 
 /* ───────── الإجراءات ───────── */
-function codesSheet(codes) {
-  const row = (label, hint, code) => `<div class="code-box"><b>${label}</b><small>${hint}</small><div class="code" dir="ltr">${esc(code)}</div>
-    <div class="btn-row"><button class="btn soft" data-act="copy-text" data-text="${esc(code)}">${icon('link')}نسخ</button><button class="btn soft" data-act="share-text" data-text="${esc(code)}">${icon('upload')}مشاركة</button></div></div>`;
-  openSheet(`<h3 class="sh-title">رموز الدعوة</h3>
-    ${row('رمز الجابي', 'يسجّل الدفعات والملاحظات فقط', codes.collector)}
-    ${row('رمز المدير', 'صلاحيات كاملة — أعطه لمن تثق به فقط', codes.admin)}
-    <p class="hint">يدخل الشخص من «المزيد ← انضمام برمز». لا تنشر الرمز علنًا.</p>`, { tall: true });
-}
-const copyText = async (t) => {
-  try { await navigator.clipboard.writeText(t); toast('تم النسخ'); } catch (e) {
-    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); toast('تم النسخ'); } catch (e2) { toast('تعذّر النسخ'); } ta.remove();
-  }
-};
-
 const CATS = ['دهن', 'غاز', 'صيانة', 'رواتب', 'قطع غيار', 'أخرى'];
 function ledgerSheet({ kind, partyId }) {
   const party = partyId ? S.live('parties').find((p) => p.id === partyId) : null;
@@ -381,6 +366,18 @@ forms.ledger = (fd, form) => {
   S.addLedger({ kind: form.dataset.kind, amount, cat: (fd.get('cat') || '').trim(), partyId: form.dataset.party || null, note: (fd.get('note') || '').trim(), at: Number.isFinite(d) ? d : Date.now() });
   closeSheet(); toast('تم الحفظ');
 };
+forms.login = async (fd, form) => {
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+  try { await SY.login(String(fd.get('username')).trim(), String(fd.get('password'))); toast('أهلًا ' + (SY.user()?.display || '')); nav.go('/home'); } catch (e) { toast(e.message); } finally { btn.disabled = false; }
+};
+forms.setup = async (fd, form) => {
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+  try { await SY.setup({ name: String(fd.get('name')).trim(), display: String(fd.get('display')).trim(), username: String(fd.get('username')).trim(), password: String(fd.get('password')) }); closeSheet(); toast('تم إنشاء المساحة'); nav.go('/home'); } catch (e) { toast(e.message); btn.disabled = false; }
+};
+forms['user-new'] = async (fd, form) => {
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+  try { await SY.createSupervisor({ username: String(fd.get('username')).trim(), password: String(fd.get('password')), display: String(fd.get('display')).trim() }); closeSheet(); toast('تم إنشاء الحساب'); } catch (e) { toast(e.message); btn.disabled = false; }
+};
 forms.party = (fd) => {
   const name = (fd.get('name') || '').trim(); if (!name) return toast('اكتب اسم القائمة');
   const p = S.addParty(name); closeSheet(); nav.go(`/party/${p.id}`);
@@ -391,23 +388,28 @@ export const actions = {
   'ledger-del': async (el) => { if (await confirmBox({ title: 'حذف هذه الحركة؟', ok: 'حذف', danger: true })) S.upd('ledger', el.dataset.id, { deleted: true }); },
   'party-add': () => openSheet(`<form data-form="party"><h3 class="sh-title">قائمة جديدة</h3><label class="field"><span>اسم الجهة</span><input name="name" placeholder="مثال: أبو الغاز، الصناعة، محلات محمود" autocomplete="off" required autofocus></label><button class="btn primary block lg" type="submit">إنشاء</button></form>`),
   'party-del': async (el) => { if (await confirmBox({ title: 'حذف القائمة؟', text: 'تُحذف حركاتها أيضًا.', ok: 'حذف', danger: true })) { const id = el.dataset.id; S.live('ledger').filter((e) => e.partyId === id).forEach((e) => S.upd('ledger', e.id, { deleted: true })); S.upd('parties', id, { deleted: true }); nav.back(); } },
-  'sync-create': () => promptSheet({ title: 'إنشاء مساحة مشتركة', label: 'اسم المساحة (مثال: مولدة الحي)', value: S.generators()[0]?.name || '', onSave: async (v) => {
-    toast('جارٍ الإنشاء…');
-    try { const codes = await SY.createWorkspace(v.trim()); setTimeout(() => codesSheet(codes), 260); toast('تم إنشاء المساحة'); } catch (e) { toast('تعذّر الإنشاء، تحقق من الاتصال'); }
-  } }),
-  'sync-join': () => promptSheet({ title: 'الانضمام برمز', label: 'رمز الدعوة', hint: 'اطلب الرمز من مدير المولدة.', onSave: async (v) => {
-    toast('جارٍ الاتصال…');
-    try { await SY.join(v); toast('تم الانضمام'); } catch (e) { toast(e.message || 'تعذّر الانضمام'); }
-  } }),
   'sync-now': () => { SY.syncNow(); toast('جارٍ المزامنة…'); },
-  'sync-codes': () => { const c = SY.inviteCodes(); if (c) codesSheet(c); },
-  'sync-leave': async () => { if (await confirmBox({ title: 'فصل هذا الجهاز؟', text: 'تبقى بياناتك على الجهاز لكنها تتوقف عن المزامنة.', ok: 'فصل', danger: true })) { SY.leave(); toast('تم الفصل'); } },
-  'copy-text': (el) => copyText(el.dataset.text),
-  'share-text': async (el) => {
-    const P = window.Capacitor && window.Capacitor.Plugins;
-    try { if (P && P.Share) { await P.Share.share({ text: el.dataset.text, dialogTitle: 'مشاركة رمز الدعوة' }); return; } } catch (e) { /* ننسخ */ }
-    copyText(el.dataset.text);
+  logout: async () => { if (await confirmBox({ title: 'تسجيل الخروج؟', text: 'تبقى بياناتك على الجهاز، وتحتاج للدخول مجددًا.', ok: 'خروج' })) { await SY.logout(); nav.go('/home'); } },
+  'setup-open': () => openSheet(`<form data-form="setup"><h3 class="sh-title">إنشاء المساحة والمدير</h3>
+    <p class="hint">تُنفَّذ مرة واحدة فقط من جهاز المدير (حسن). بعدها ينشئ المشرفين من «المزيد ← إدارة المشرفين».</p>
+    <label class="field"><span>اسم المولدة / المساحة</span><input name="name" autocomplete="off"></label>
+    <label class="field"><span>اسمك</span><input name="display" autocomplete="off" required></label>
+    <label class="field"><span>اسم المستخدم (إنجليزي)</span><input name="username" dir="ltr" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" required></label>
+    <label class="field"><span>كلمة المرور (6 أحرف فأكثر)</span><input name="password" type="password" dir="ltr" autocomplete="new-password" required></label>
+    <button class="btn primary block lg" type="submit">إنشاء</button></form>`),
+  'user-add': () => openSheet(`<form data-form="user-new"><h3 class="sh-title">مشرف جديد</h3>
+    <label class="field"><span>الاسم الذي يظهر في السجلات</span><input name="display" autocomplete="off" required autofocus></label>
+    <label class="field"><span>اسم المستخدم (إنجليزي)</span><input name="username" dir="ltr" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" required></label>
+    <label class="field"><span>كلمة المرور (6 أحرف فأكثر)</span><input name="password" dir="ltr" autocomplete="off" required></label>
+    <p class="hint">سلّم الاسم وكلمة المرور للمشرف ليدخل بهما من جهازه.</p>
+    <button class="btn primary block lg" type="submit">إنشاء الحساب</button></form>`),
+  'user-menu': (el) => {
+    const x = (SY.teamList() || []).find((u) => u.id === el.dataset.id); if (!x) return;
+    menuSheet(x.display, [menuItem('edit', 'تعديل الاسم', 'user-rename', `data-id="${x.id}"`), menuItem('hash', 'تغيير كلمة المرور', 'user-pass', `data-id="${x.id}"`), menuItem(x.active ? 'x' : 'check', x.active ? 'إيقاف الحساب' : 'تفعيل الحساب', 'user-toggle', `data-id="${x.id}"`, x.active)]);
   },
+  'user-rename': (el) => { const x = SY.teamList().find((u) => u.id === el.dataset.id); promptSheet({ title: 'تعديل الاسم', label: 'الاسم', value: x.display, onSave: (v) => { SY.updateUser(x.id, { display: v.trim() }).then(() => toast('تم الحفظ')).catch((e) => toast(e.message)); } }); },
+  'user-pass': (el) => promptSheet({ title: 'كلمة مرور جديدة', label: 'كلمة المرور (6 أحرف فأكثر)', hint: 'سيُسجَّل خروج المشرف من أجهزته ويدخل بالكلمة الجديدة.', onSave: (v) => { SY.updateUser(el.dataset.id, { password: v.trim() }).then(() => toast('تم تغيير كلمة المرور')).catch((e) => toast(e.message)); } }),
+  'user-toggle': async (el) => { const x = SY.teamList().find((u) => u.id === el.dataset.id); if (x.active && !(await confirmBox({ title: `إيقاف ${x.display}؟`, text: 'لن يستطيع الدخول أو المزامنة حتى تعيد تفعيله.', ok: 'إيقاف', danger: true }))) return; SY.updateUser(x.id, { active: !x.active }).then(() => toast(x.active ? 'تم الإيقاف' : 'تم التفعيل')).catch((e) => toast(e.message)); },
   back: () => nav.back(),
   go: (el) => nav.go(el.dataset.to),
   'sheet-close': () => closeSheet(),
