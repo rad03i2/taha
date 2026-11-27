@@ -5,6 +5,7 @@ import { applyDigits, closeSheet, sheetOpen, icon, toast } from './ui.js';
 import { nav } from './nav.js';
 import { routes, ui, resetViewState, cabinetList, subsList } from './views.js';
 import { actions, handleSubmit } from './forms.js';
+import * as SY from './sync.js';
 
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabbar');
@@ -80,12 +81,14 @@ function applyTheme() {
 }
 
 /* ───────── الأحداث ───────── */
+const ADMIN_ONLY = new Set(['add-gen', 'gen-menu', 'edit-gen', 'edit-phases', 'del-gen', 'add-cab', 'cab-menu', 'del-cab', 'add-sub', 'add-partner', 'edit-sub', 'del-sub', 'edit-conn', 'del-conn', 'add-conn', 'set-price', 'set-currency', 'wipe', 'import-file', 'seed-demo', 'sub-menu', 'conn-menu']);
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const fn = actions[el.dataset.act];
   if (!fn) return;
   e.preventDefault();
+  if (!SY.isAdmin() && ADMIN_ONLY.has(el.dataset.act)) return toast('هذه العملية للمدير فقط');
   if (el.dataset.close && sheetOpen()) { const snap = { dataset: { ...el.dataset } }; closeSheet(); setTimeout(() => fn(snap), 230); return; }
   fn(el, e);
 });
@@ -131,8 +134,10 @@ function wireNative() {
   await S.load();
   if (!location.hash) history.replaceState(null, '', '#/home');
   wireNative();
+  SY.onStatus(() => { if (parse().name === 'more') render(true); });
   render(false);
+  SY.start();
   const sp = document.getElementById('splash');
   if (sp) { sp.classList.add('out'); setTimeout(() => sp.remove(), 400); }
-  window.__gl = { S, ui, nav }; // للاختبار والتشخيص
+  window.__gl = { S, ui, nav, SY }; // للاختبار والتشخيص
 })();

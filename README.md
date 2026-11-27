@@ -5,3 +5,8 @@
 - الواجهة: HTML/CSS/JS بدون أدوات بناء (`www/`) داخل Capacitor.
 - البيانات محلية (IndexedDB) وجاهزة للمزامنة السحابية لاحقاً (معرّفات uuid، وقت التعديل، حذف ناعم).
 - الـ APK يُبنى تلقائياً عبر GitHub Actions ويُنشر في Releases.
+
+## المزامنة (المرحلة 2)
+1. أنشئ مشروع Supabase والصق `supabase/schema.sql` في SQL Editor.
+2. ضع `SUPABASE_URL` و`SUPABASE_KEY` (anon) في `www/js/config.js`.
+3. من التطبيق: المزيد ← إنشاء مساحة، ثم شارك رمز الدعوة (مدير أو جابٍ).

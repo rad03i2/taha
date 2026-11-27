@@ -1,4 +1,5 @@
 // النماذج (النوافذ السفلية) والإجراءات
+import * as SY from './sync.js';
 import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, ymOf, MONTHS, normDigits, parseNum } from './util.js';
 import * as S from './store.js';
 import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, empty } from './ui.js';
@@ -321,7 +322,39 @@ forms.import = (fd) => {
 };
 
 /* ───────── الإجراءات ───────── */
+function codesSheet(codes) {
+  const row = (label, hint, code) => `<div class="code-box"><b>${label}</b><small>${hint}</small><div class="code" dir="ltr">${esc(code)}</div>
+    <div class="btn-row"><button class="btn soft" data-act="copy-text" data-text="${esc(code)}">${icon('link')}نسخ</button><button class="btn soft" data-act="share-text" data-text="${esc(code)}">${icon('upload')}مشاركة</button></div></div>`;
+  openSheet(`<h3 class="sh-title">رموز الدعوة</h3>
+    ${row('رمز الجابي', 'يسجّل الدفعات والملاحظات فقط', codes.collector)}
+    ${row('رمز المدير', 'صلاحيات كاملة — أعطه لمن تثق به فقط', codes.admin)}
+    <p class="hint">يدخل الشخص من «المزيد ← انضمام برمز». لا تنشر الرمز علنًا.</p>`, { tall: true });
+}
+const copyText = async (t) => {
+  try { await navigator.clipboard.writeText(t); toast('تم النسخ'); } catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('تم النسخ'); } catch (e2) { toast('تعذّر النسخ'); } ta.remove();
+  }
+};
+
 export const actions = {
+  'sync-create': () => promptSheet({ title: 'إنشاء مساحة مشتركة', label: 'اسم المساحة (مثال: مولدة الحي)', value: S.generators()[0]?.name || '', onSave: async (v) => {
+    toast('جارٍ الإنشاء…');
+    try { const codes = await SY.createWorkspace(v.trim()); setTimeout(() => codesSheet(codes), 260); toast('تم إنشاء المساحة'); } catch (e) { toast('تعذّر الإنشاء، تحقق من الاتصال'); }
+  } }),
+  'sync-join': () => promptSheet({ title: 'الانضمام برمز', label: 'رمز الدعوة', hint: 'اطلب الرمز من مدير المولدة.', onSave: async (v) => {
+    toast('جارٍ الاتصال…');
+    try { await SY.join(v); toast('تم الانضمام'); } catch (e) { toast(e.message || 'تعذّر الانضمام'); }
+  } }),
+  'sync-now': () => { SY.syncNow(); toast('جارٍ المزامنة…'); },
+  'sync-codes': () => { const c = SY.inviteCodes(); if (c) codesSheet(c); },
+  'sync-leave': async () => { if (await confirmBox({ title: 'فصل هذا الجهاز؟', text: 'تبقى بياناتك على الجهاز لكنها تتوقف عن المزامنة.', ok: 'فصل', danger: true })) { SY.leave(); toast('تم الفصل'); } },
+  'copy-text': (el) => copyText(el.dataset.text),
+  'share-text': async (el) => {
+    const P = window.Capacitor && window.Capacitor.Plugins;
+    try { if (P && P.Share) { await P.Share.share({ text: el.dataset.text, dialogTitle: 'مشاركة رمز الدعوة' }); return; } } catch (e) { /* ننسخ */ }
+    copyText(el.dataset.text);
+  },
   back: () => nav.back(),
   go: (el) => nav.go(el.dataset.to),
   'sheet-close': () => closeSheet(),

@@ -26,6 +26,8 @@ const blank = () => ({
   debts: [],
   notes: [],
   log: [],
+  sync: { cfg: null, pushed: {}, lastPull: '' },
+  settingsAt: 0,
 });
 
 /* ───────── التخزين ───────── */
@@ -82,6 +84,7 @@ function migrate(d) {
     if (!Array.isArray(out[k])) out[k] = [];
   }
   if (!out.records || typeof out.records !== 'object') out.records = {};
+  if (!out.sync || typeof out.sync !== 'object') out.sync = { cfg: null, pushed: {}, lastPull: '' };
   return out;
 }
 
@@ -96,12 +99,18 @@ function changed() {
 export const onChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
 
 /* ───────── أساسيات ───────── */
+const SHARED_SETTINGS = ['pricePerAmp', 'currency'];
+export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log'];
 export const settings = () => db.settings;
 export const raw = () => db;
 export const live = (k) => db[k].filter((x) => !x.deleted);
 const stamp = (o) => { o.updatedAt = Date.now(); o.by = db.settings.user || ''; return o; };
 
-export function setSetting(k, v) { db.settings[k] = v; changed(); }
+export function setSetting(k, v) {
+  db.settings[k] = v;
+  if (SHARED_SETTINGS.includes(k)) db.settingsAt = Date.now();
+  changed();
+}
 export function add(k, o) {
   const rec = stamp({ id: uid(), createdAt: Date.now(), ...o });
   db[k].push(rec);
@@ -323,18 +332,22 @@ export function removeSubscriber(id) {
 }
 
 /* ───────── النسخ الاحتياطي ───────── */
-export const exportJSON = () => JSON.stringify({ ...db, exportedAt: Date.now() }, null, 1);
+export const exportJSON = () => JSON.stringify({ ...db, sync: undefined, exportedAt: Date.now() }, null, 1);
 export function importJSON(text) {
   const d = JSON.parse(text);
   if (!d || typeof d !== 'object' || !Array.isArray(d.generators) || !Array.isArray(d.subscribers)) throw new Error('ملف غير صالح');
+  const keep = db.sync;
   db = migrate(d);
+  db.sync = { cfg: keep.cfg, pushed: {}, lastPull: keep.lastPull };
+  db.settingsAt = Date.now();
   db.settings.onboarded = true;
   logAct('استيراد نسخة احتياطية');
   changed();
 }
 export function wipe() {
-  const s = db.settings;
+  const s = db.settings; const keep = db.sync;
   db = blank();
+  db.sync = { cfg: keep.cfg, pushed: {}, lastPull: '' };
   db.settings = { ...db.settings, user: s.user, theme: s.theme, digits: s.digits, currency: s.currency };
   changed();
 }
@@ -412,3 +425,51 @@ export function seedDemo() {
 }
 
 export { parseNum };
+
+
+/* ───────── خطّاف المزامنة ───────── */
+export const syncState = () => db.sync;
+const tsOf = (x) => x.updatedAt ?? x.at ?? 0;
+export function dirtyItems(limit = 400) {
+  const out = []; const P = db.sync.pushed;
+  const consider = (kind, x) => {
+    const key = `${kind}|${x.id}`; const ts = tsOf(x);
+    if (!(key in P) || ts > P[key]) out.push({ kind, id: x.id, ts, data: x, key });
+  };
+  for (const k of SYNC_KINDS) {
+    if (k === 'records') Object.values(db.records).forEach((x) => consider(k, x));
+    else db[k].forEach((x) => consider(k, x));
+    if (out.length >= limit) break;
+  }
+  if (db.settingsAt) {
+    const x = { id: 'shared', pricePerAmp: db.settings.pricePerAmp, currency: db.settings.currency, updatedAt: db.settingsAt };
+    consider('settings', x);
+  }
+  return out.slice(0, limit);
+}
+export function markPushed(items) { items.forEach((i) => { db.sync.pushed[i.key] = i.ts; }); scheduleSave(); }
+export function setSyncCfg(cfg) { db.sync.cfg = cfg; if (!cfg) { db.sync.pushed = {}; db.sync.lastPull = ''; } scheduleSave(); }
+export function setLastPull(c) { db.sync.lastPull = c; scheduleSave(); }
+export function applyRemote(items) {
+  let n = 0;
+  for (const { kind, data } of items) {
+    if (!data || !data.id) continue;
+    const ts = tsOf(data);
+    db.sync.pushed[`${kind}|${data.id}`] = ts;
+    if (kind === 'settings') {
+      if (ts > (db.settingsAt || 0)) { db.settings.pricePerAmp = data.pricePerAmp; db.settings.currency = data.currency; db.settingsAt = ts; n++; }
+    } else if (kind === 'records') {
+      const cur = db.records[data.id];
+      if (!cur || ts > tsOf(cur)) { db.records[data.id] = data; n++; }
+    } else if (SYNC_KINDS.includes(kind)) {
+      const arr = db[kind]; const i = arr.findIndex((x) => x.id === data.id);
+      if (i < 0) { arr.push(data); n++; } else if (ts > tsOf(arr[i])) { arr[i] = data; n++; }
+    }
+  }
+  if (n) {
+    db.log.sort((a, b) => b.at - a.at);
+    if (db.log.length > 400) db.log.length = 400;
+    changed();
+  } else scheduleSave();
+  return n;
+}

@@ -1,4 +1,5 @@
 // الشاشات: كل دالة تعيد { html, tab } ويُركَّب الناتج في #view
+import * as SY from './sync.js';
 import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, MONTHS, timeAgo, normDigits } from './util.js';
 import * as S from './store.js';
 import { icon, money, moneyShort, ring, bar, empty, chip } from './ui.js';
@@ -329,6 +330,22 @@ export function debts() {
 
 /* ───────── المزيد والإعدادات ───────── */
 const setRow = (ic, t, sub, act, extra = '') => `<button class="set" data-act="${act}" ${extra}>${icon(ic, 'set-ic')}<div class="grow"><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div>${icon('next', 'chev')}</button>`;
+function syncCard() {
+  const dev = `<small class="mono">جهاز: ${esc(S.raw().deviceId.slice(0, 8))}</small>`;
+  if (!SY.available()) return `<div class="card sync"><div class="sync-h">${icon('cloud')}<div><b>المزامنة غير مفعّلة بعد</b><small>ستُفعَّل بعد ربط الخدمة السحابية</small></div></div>${dev}</div>`;
+  const c = SY.cfg(); const s = SY.status();
+  if (!c) return `<div class="card sync">
+    <div class="sync-h">${icon('cloud')}<div><b>مزامنة بين الأجهزة</b><small>أي تغيير عند شخص يصل للبقية</small></div></div>
+    <p class="muted sm">أنشئ مساحة مشتركة لمولدتك وشارك رمز الدعوة مع فريقك، أو انضم برمز وصلك.</p>
+    <div class="btn-row"><button class="btn primary" data-act="sync-create">${icon('plus')}إنشاء مساحة</button><button class="btn soft" data-act="sync-join">${icon('users')}انضمام برمز</button></div>${dev}</div>`;
+  const line = s.state === 'err' ? `<span class="chip debt">${esc(s.err)}</span>` : s.state === 'sync' ? '<span class="chip">جارٍ المزامنة…</span>' : s.at ? `<span class="chip paid">متزامن · ${timeAgo(s.at)}</span>` : '<span class="chip">بانتظار المزامنة</span>';
+  return `<div class="card sync">
+    <div class="sync-h">${icon('cloud')}<div><b>متصل بالمساحة المشتركة</b><small>دورك: ${c.role === 'admin' ? 'مدير' : 'جابٍ (تسجيل الدفعات فقط)'}</small></div></div>
+    <div class="sync-st">${line}</div>
+    <div class="btn-row"><button class="btn soft" data-act="sync-now">${icon('clock')}مزامنة الآن</button>${c.role === 'admin' ? `<button class="btn soft" data-act="sync-codes">${icon('users')}رموز الدعوة</button>` : ''}</div>
+    <button class="btn danger-ghost block" data-act="sync-leave">فصل هذا الجهاز</button>${dev}</div>`;
+}
+
 export function more() {
   const st = S.settings();
   const gens = S.generators();
@@ -360,11 +377,7 @@ export function more() {
       ${gens.length ? '' : setRow('bolt', 'بيانات تجريبية', 'للتجربة فقط', 'seed-demo')}
     </div>
     ${secH('المزامنة السحابية')}
-    <div class="card sync">
-      <div class="sync-h">${icon('cloud')}<div><b>قريبًا: مزامنة بين 6 أجهزة</b><small>أي تغيير عند شخص يصل للبقية</small></div></div>
-      <p class="muted sm">التطبيق مبنيّ جاهزًا لها: لكل سجل معرّف فريد وتاريخ تعديل واسم من عدّله، والدفعات تُضاف ولا تُعدَّل.</p>
-      <small class="mono">جهاز: ${esc(S.raw().deviceId.slice(0, 8))}</small>
-    </div>
+    ${syncCard()}
     <p class="foot">حسابات المولدة · الإصدار 1.0</p>
   </main>`;
   return { tab: 'more', html };
