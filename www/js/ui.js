@@ -1,5 +1,5 @@
 // مكوّنات الواجهة المشتركة: أيقونات، نوافذ سفلية، إشعارات، أرقام
-import { esc, fmtNum } from './util.js';
+import { esc, fmtNum, CUR } from './util.js';
 import { settings } from './store.js';
 import { sfx, haptic } from './fx.js';
 
@@ -41,22 +41,17 @@ const P = {
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
   tag: '<path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.4 1.4 0 0 1 0 2l-6.2 6.2a1.4 1.4 0 0 1-2 0z"/><circle cx="8.3" cy="8.3" r="1.3" fill="currentColor"/>',
   volume: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  battery: '<rect x="3" y="8" width="16" height="9" rx="2.4"/><path d="M21 11v3"/><path d="M8 11v3M12 11v3"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor"/>',
+  lock: '<rect x="5" y="10.5" width="14" height="10" rx="2.6"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>',
   vibrate: '<rect x="8" y="3.5" width="8" height="17" rx="2.4"/><path d="M4.5 8v8M19.5 8v8"/>',
 };
 export const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
 
 /* ───────── الأرقام ───────── */
-const IND = '٠١٢٣٤٥٦٧٨٩';
-export function applyDigits(root) {
-  if (settings().digits !== 'indic') return;
-  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode: (n) => (/[0-9]/.test(n.nodeValue) && !/^(SCRIPT|STYLE|TEXTAREA)$/.test(n.parentNode.nodeName) ? 1 : 2),
-  });
-  const list = [];
-  while (w.nextNode()) list.push(w.currentNode);
-  list.forEach((n) => { n.nodeValue = n.nodeValue.replace(/[0-9]/g, (d) => IND[d]); });
-}
-export const money = (n) => `${fmtNum(n)} ${esc(settings().currency || 'د.ع')}`;
+// الأرقام لاتينية دائمًا؛ تُبقى الدالة لأن الشاشات تستدعيها
+export function applyDigits() {}
+export const money = (n) => `${fmtNum(n)} ${CUR}`;
 export const moneyShort = (n) => {
   const a = Math.abs(n || 0);
   if (a >= 1e6) return `${fmtNum(n / 1e6)} مليون`;
@@ -66,6 +61,7 @@ export const moneyShort = (n) => {
 
 /* ───────── الإشعارات ───────── */
 let toastEl = null; let toastTimer = null;
+export const hideToast = () => { clearTimeout(toastTimer); if (toastEl) toastEl.classList.remove('show'); };
 export function toast(msg, opt = {}) {
   if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'toast'; document.body.appendChild(toastEl); }
   toastEl.innerHTML = `<span>${esc(msg)}</span>${opt.undo ? `<button class="toast-undo" type="button">${icon('undo')}تراجع</button>` : ''}`;

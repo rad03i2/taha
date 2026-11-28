@@ -1,11 +1,13 @@
 // النماذج (النوافذ السفلية) والإجراءات
 import * as SY from './sync.js';
-import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, ymOf, MONTHS, normDigits, parseNum } from './util.js';
+import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, ymOf, MONTHS, normDigits, parseNum, CUR } from './util.js';
 import * as S from './store.js';
 import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, empty } from './ui.js';
 import { nav } from './nav.js';
 import { dt, ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
-import { sfx, haptic } from './fx.js';
+import { sfx, haptic, GROUPS } from './fx.js';
+import { PERMS } from './perms.js';
+import { enablePush, askPowerOnce, power } from './push.js';
 
 const allCabinets = () => {
   const out = [];
@@ -119,7 +121,7 @@ export function paySheet(subId, preYm) {
       <div class="mchips">${months.map(chip).join('')}</div>
       ${unpaid.length > 1 ? `<button type="button" class="link" data-all>تحديد كل المتأخر (${unpaid.length})</button>` : ''}
     </div>
-    ${due ? `<label class="field"><span>المبلغ المستلم (${esc(S.settings().currency)})</span><input name="amount" id="pay-amt" inputmode="decimal" autocomplete="off"></label>
+    ${due ? `<label class="field"><span>المبلغ المستلم (${CUR})</span><input name="amount" id="pay-amt" inputmode="decimal" autocomplete="off"></label>
     <div class="total"><span id="pay-rest-l">المطلوب</span><b id="pay-total">${money(due)}</b></div>` : ''}
     <button class="btn primary block lg" type="submit">${icon('check')}تسجيل الدفعة</button>
   </form>`, {
@@ -134,9 +136,9 @@ export function paySheet(subId, preYm) {
         if (!amt) return;
         const total = need(); const got = parseNum(amt.value);
         const L = el.querySelector('#pay-rest-l'); const T = el.querySelector('#pay-total');
-        if (got > 0 && got < total) { L.textContent = 'سيتبقى عليه'; T.textContent = `${fmtNum(total - got)} ${S.settings().currency}`; T.className = 'bad'; }
-        else if (got > total) { L.textContent = 'المبلغ أكبر من المطلوب'; T.textContent = `${fmtNum(total)} ${S.settings().currency}`; T.className = 'bad'; }
-        else { L.textContent = 'المطلوب'; T.textContent = `${fmtNum(total)} ${S.settings().currency}`; T.className = ''; }
+        if (got > 0 && got < total) { L.textContent = 'سيتبقى عليه'; T.textContent = `${fmtNum(total - got)} ${CUR}`; T.className = 'bad'; }
+        else if (got > total) { L.textContent = 'المبلغ أكبر من المطلوب'; T.textContent = `${fmtNum(total)} ${CUR}`; T.className = 'bad'; }
+        else { L.textContent = 'المطلوب'; T.textContent = `${fmtNum(total)} ${CUR}`; T.className = ''; }
       };
       const reset = () => { if (amt) amt.value = need() || ''; show(); };
       form.addEventListener('change', (e) => { if (e.target.name === 'ym') reset(); });
@@ -180,7 +182,7 @@ export function debtSheet({ subId, kind }) {
   openSheet(`<form data-form="debt" data-id="${subId}" data-kind="${kind}">
     <h3 class="sh-title">${kind === 'debt' ? 'تسجيل دين' : 'تسديد من الدين'}</h3>
     <div class="who">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>الدين المسجّل الحالي ${money(bal)}</small></div></div>
-    <label class="field"><span>المبلغ (${esc(S.settings().currency)})</span><input name="amount" inputmode="decimal" value="${kind === 'payment' ? bal : ''}" autocomplete="off" required autofocus></label>
+    <label class="field"><span>المبلغ (${CUR})</span><input name="amount" inputmode="decimal" value="${kind === 'payment' ? bal : ''}" autocomplete="off" required autofocus></label>
     <label class="field"><span>السبب / ملاحظة</span><input name="note" placeholder="${kind === 'debt' ? 'مثال: رصيد قديم، سلفة…' : 'اختياري'}" autocomplete="off"></label>
     <button class="btn ${kind === 'debt' ? 'danger' : 'primary'} block lg" type="submit">${kind === 'debt' ? 'تسجيل الدين' : 'تسجيل التسديد'}</button>
   </form>`);
@@ -305,7 +307,7 @@ export function priceSheet(ym) {
   const r = S.priceRecFor(ym);
   const w = openSheet(`<form data-form="price" data-ym="${ym}">
     <h3 class="sh-title">تسعيرة ${esc(ymLabel(ym))}</h3>
-    <label class="field"><span>سعر الأمبير الواحد (${esc(S.settings().currency)})</span><input name="price" inputmode="decimal" value="${cur > 0 ? cur : ''}" placeholder="مثال: 9000" autocomplete="off" autofocus required></label>
+    <label class="field"><span>سعر الأمبير الواحد (${CUR})</span><input name="price" inputmode="decimal" value="${cur > 0 ? cur : ''}" placeholder="مثال: 9000" autocomplete="off" autofocus required></label>
     ${gens.length > 1 ? `<details class="adv"><summary>${icon('gen')}سعر خاص لمولدة معينة (اختياري)</summary>
       ${gens.map((g) => `<label class="field"><span>${esc(g.name)}</span><input name="g_${g.id}" inputmode="decimal" value="${own?.byGen?.[g.id] > 0 ? own.byGen[g.id] : ''}" placeholder="اتركه فارغًا لاستعمال السعر العام" autocomplete="off"></label>`).join('')}</details>` : ''}
     <p class="hint">${own ? 'هذا الشهر له تسعيرة محددة.' : r ? `هذا الشهر يرث سعر ${esc(ymLabel(r.ym))} حاليًا.` : 'لا توجد تسعيرة سابقة.'} الأشهر التالية غير المحددة تأخذ هذا السعر تلقائيًا. التسديدات المسجّلة سابقًا لا تتغير.</p>
@@ -326,7 +328,7 @@ forms.price = (fd, form) => {
 // الضغط المطوّل على شهر: تسديد (أو إلغاء إن كان مسددًا)
 export function holdInfo(el) {
   const { id, ym, k } = el.dataset;
-  if (k === 'before') return null;
+  if (k === 'before' || !SY.can('pay')) return null;
   const { m } = ymParse(ym);
   return { id, ym, m, cancel: k === 'paid' };
 }
@@ -340,6 +342,20 @@ export function holdDone({ id, ym, cancel }) {
     toast(`تم تسديد ${ymLabel(ym)} — ${s.name}`, { undo: () => S.restoreRecords(prev), quiet: true });
   }
 }
+
+/* ───────── الصلاحيات ───────── */
+const permRows = (perms) => PERMS.map((p) => `<label class="permrow"><input type="checkbox" name="p_${p.k}" ${perms[p.k] !== false ? 'checked' : ''}><span class="sw"></span><div class="grow"><b>${esc(p.t)}</b><small>${esc(p.d)}</small></div></label>`).join('');
+const readPerms = (fd) => Object.fromEntries(PERMS.map((p) => [p.k, fd.get('p_' + p.k) !== null]));
+function permsSheet(x) {
+  openSheet(`<form data-form="perms" data-id="${x.id}"><h3 class="sh-title">صلاحيات ${esc(x.display)}</h3>
+    <p class="hint">الصلاحية الموقوفة تُخفي الأزرار المقابلة عنده، ويرفض الخادم أي تغيير منها. التسعيرة يراها ولا يغيّرها دائمًا.</p>
+    <div class="permlist">${permRows(x.perms || {})}</div>
+    <button class="btn primary block lg" type="submit">${icon('check')}حفظ الصلاحيات</button></form>`);
+}
+forms.perms = async (fd, form) => {
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+  try { await SY.updateUser(form.dataset.id, { perms: readPerms(fd) }); closeSheet(); toast('تم حفظ الصلاحيات'); } catch (e) { toast(e.message); btn.disabled = false; }
+};
 
 forms.prompt = (fd, form) => { const ok = form._save(fd.get('v')); if (ok !== false) closeSheet(); };
 
@@ -374,7 +390,6 @@ function importFile() {
 forms.onboard = (fd) => {
   const pr = parseNum(fd.get('price'));
   if (pr > 0) S.setPrice(ymNow(), pr);
-  S.setSetting('currency', (fd.get('currency') || 'د.ع').trim() || 'د.ع');
   S.setSetting('user', (fd.get('user') || '').trim());
   S.setSetting('onboarded', true);
   const g = S.addGenerator({ name: (fd.get('name') || 'المولدة 1').trim(), price: 0 });
@@ -397,7 +412,7 @@ function ledgerSheet({ kind, partyId }) {
   const today = new Date().toISOString().slice(0, 10);
   openSheet(`<form data-form="ledger" data-kind="${kind}" data-party="${partyId || ''}">
     <h3 class="sh-title">${esc(title)}</h3>
-    <label class="field"><span>المبلغ (${esc(S.settings().currency)})</span><input name="amount" inputmode="decimal" autocomplete="off" required autofocus></label>
+    <label class="field"><span>المبلغ (${CUR})</span><input name="amount" inputmode="decimal" autocomplete="off" required autofocus></label>
     ${party ? '' : `<label class="field"><span>${kind === 'in' ? 'مصدر الوارد' : 'نوع المصروف'}</span><input name="cat" list="cats" placeholder="${kind === 'in' ? 'مثال: اشتراك خارجي' : 'مثال: دهن'}" autocomplete="off"></label>${kind === 'out' ? `<datalist id="cats">${CATS.map((c) => `<option value="${c}">`).join('')}</datalist>` : ''}`}
     <label class="field"><span>ملاحظة</span><input name="note" autocomplete="off"></label>
     <label class="field"><span>التاريخ</span><input type="date" name="date" value="${today}"></label>
@@ -412,7 +427,7 @@ forms.ledger = (fd, form) => {
 };
 forms.login = async (fd, form) => {
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
-  try { await SY.login(String(fd.get('username')).trim(), String(fd.get('password'))); toast('أهلًا ' + (SY.user()?.display || '')); nav.go('/home'); } catch (e) { toast(e.message); } finally { btn.disabled = false; }
+  try { await SY.login(String(fd.get('username')).trim(), String(fd.get('password'))); toast('أهلًا ' + (SY.user()?.display || '')); nav.go('/home'); enablePush({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)); } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 };
 forms.setup = async (fd, form) => {
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
@@ -420,7 +435,7 @@ forms.setup = async (fd, form) => {
 };
 forms['user-new'] = async (fd, form) => {
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
-  try { await SY.createSupervisor({ username: String(fd.get('username')).trim(), password: String(fd.get('password')), display: String(fd.get('display')).trim() }); closeSheet(); toast('تم إنشاء الحساب'); } catch (e) { toast(e.message); btn.disabled = false; }
+  try { await SY.createSupervisor({ username: String(fd.get('username')).trim(), password: String(fd.get('password')), display: String(fd.get('display')).trim(), perms: readPerms(fd) }); closeSheet(); toast('تم إنشاء الحساب'); } catch (e) { toast(e.message); btn.disabled = false; }
 };
 forms.party = (fd) => {
   const name = (fd.get('name') || '').trim(); if (!name) return toast('اكتب اسم القائمة');
@@ -445,11 +460,12 @@ export const actions = {
     <label class="field"><span>الاسم الذي يظهر في السجلات</span><input name="display" autocomplete="off" required autofocus></label>
     <label class="field"><span>اسم المستخدم (إنجليزي)</span><input name="username" dir="ltr" autocapitalize="none" autocorrect="off" spellcheck="false" autocomplete="off" required></label>
     <label class="field"><span>كلمة المرور (6 أحرف فأكثر)</span><input name="password" dir="ltr" autocomplete="off" required></label>
-    <p class="hint">سلّم الاسم وكلمة المرور للمشرف ليدخل بهما من جهازه.</p>
+    <details class="adv"><summary>${icon('shield')}الصلاحيات (كلها مفعّلة تلقائيًا)</summary>${permRows({})}</details>
+    <p class="hint">سلّم الاسم وكلمة المرور للمشرف ليدخل بهما من جهازه. تستطيع تعديل صلاحياته لاحقًا.</p>
     <button class="btn primary block lg" type="submit">إنشاء الحساب</button></form>`),
   'user-menu': (el) => {
     const x = (SY.teamList() || []).find((u) => u.id === el.dataset.id); if (!x) return;
-    menuSheet(x.display, [menuItem('edit', 'تعديل الاسم', 'user-rename', `data-id="${x.id}"`), menuItem('hash', 'تغيير كلمة المرور', 'user-pass', `data-id="${x.id}"`), menuItem(x.active ? 'x' : 'check', x.active ? 'إيقاف الحساب' : 'تفعيل الحساب', 'user-toggle', `data-id="${x.id}"`, x.active)]);
+    menuSheet(x.display, [menuItem('shield', 'الصلاحيات', 'user-perms', `data-id="${x.id}"`), menuItem('edit', 'تعديل الاسم', 'user-rename', `data-id="${x.id}"`), menuItem('hash', 'تغيير كلمة المرور', 'user-pass', `data-id="${x.id}"`), menuItem(x.active ? 'x' : 'check', x.active ? 'إيقاف الحساب' : 'تفعيل الحساب', 'user-toggle', `data-id="${x.id}"`, x.active)]);
   },
   'user-rename': (el) => { const x = SY.teamList().find((u) => u.id === el.dataset.id); promptSheet({ title: 'تعديل الاسم', label: 'الاسم', value: x.display, onSave: (v) => { SY.updateUser(x.id, { display: v.trim() }).then(() => toast('تم الحفظ')).catch((e) => toast(e.message)); } }); },
   'user-pass': (el) => promptSheet({ title: 'كلمة مرور جديدة', label: 'كلمة المرور (6 أحرف فأكثر)', hint: 'سيُسجَّل خروج المشرف من أجهزته ويدخل بالكلمة الجديدة.', onSave: (v) => { SY.updateUser(el.dataset.id, { password: v.trim() }).then(() => toast('تم تغيير كلمة المرور')).catch((e) => toast(e.message)); } }),
@@ -470,13 +486,24 @@ export const actions = {
     const { id, ym } = el.dataset; const s = S.ix().sub.get(id);
     const k = S.monthState(s, ym);
     if (k === 'before') return toast('هذا الشهر قبل بداية حساب المشترك');
+    if (!SY.can('pay')) return toast('ليست لديك صلاحية التسديد');
     if (k === 'paid') return toast('اضغط مطولًا (ثانية) لإلغاء تسديد هذا الشهر', { quiet: true });
     const ok = S.unpaidMonths(s).includes(ym) || [1, 2, 3].map((i) => ymAdd(ymNow(), i)).includes(ym);
     if (!ok) return toast('اضغط مطولًا (ثانية) لتسديد هذا الشهر مقدّمًا', { quiet: true });
     paySheet(id, ym);
   },
-  'price-edit': (el) => priceSheet(el.dataset.ym),
-  'price-clear': (el) => { S.clearPrice(el.dataset.ym); toast('أُزيل تحديد التسعيرة'); },
+  'price-edit': (el) => { if (SY.isManager()) priceSheet(el.dataset.ym); },
+  'price-clear': (el) => { if (SY.isManager()) { S.clearPrice(el.dataset.ym); toast('أُزيل تحديد التسعيرة'); } },
+  'snd-pick': (el) => {
+    const G = GROUPS[el.dataset.g]; if (!G) return;
+    S.setSetting(G.key, el.dataset.id);
+    sfx.preview(el.dataset.g, el.dataset.id);
+  },
+  'push-enable': async () => { const r = await enablePush({ ask: true }); toast(r === 'ok' ? 'تم تفعيل الإشعارات' : r === 'denied' ? 'لم تُمنح الصلاحية. فعّلها من إعدادات إشعارات الهاتف' : 'تعذّر التفعيل'); },
+  'power-request': () => power.request(),
+  'notif-settings': () => power.notifSettings(),
+  'app-settings': () => power.appSettings(),
+  'user-perms': (el) => { const x = (SY.teamList() || []).find((u) => u.id === el.dataset.id); if (x) permsSheet(x); },
   pyear: (el) => { ui.pyear += +el.dataset.d; nav.rerender(); },
   'toggle-sound': () => { S.setSetting('sound', S.settings().sound === false); if (S.settings().sound !== false) sfx.ok(); },
   'toggle-haptic': () => { S.setSetting('haptic', S.settings().haptic === false); if (S.settings().haptic !== false) haptic('success'); },
@@ -518,12 +545,9 @@ export const actions = {
   'toggle-active': (el) => { const s = S.ix().sub.get(el.dataset.id); S.upd('subscribers', s.id, { active: s.active === false }); S.logAct(`${s.active === false ? 'تفعيل' : 'إيقاف'} مشترك: ${s.name}`, s.id, 'sub'); },
   'del-sub': async (el) => { const s = S.ix().sub.get(el.dataset.id); if (await confirmBox({ title: `حذف ${s.name}؟`, text: 'سيُحذف سجله وأشهره.', ok: 'حذف', danger: true })) { S.removeSubscriber(s.id); nav.back(); } },
   'set-user': () => promptSheet({ title: 'اسمك', label: 'الاسم', value: S.settings().user, onSave: (v) => S.setSetting('user', v.trim()) }),
-  'set-currency': () => promptSheet({ title: 'العملة', label: 'رمز العملة', value: S.settings().currency, onSave: (v) => S.setSetting('currency', v.trim() || 'د.ع') }),
-  'toggle-digits': () => S.setSetting('digits', S.settings().digits === 'indic' ? 'latin' : 'indic'),
   'cycle-theme': () => { const o = ['auto', 'light', 'dark']; S.setSetting('theme', o[(o.indexOf(S.settings().theme) + 1) % 3]); },
   export: () => shareFile(`generator-backup-${new Date().toISOString().slice(0, 10)}.json`, S.exportJSON()),
   'import-file': () => importFile(),
-  wipe: async () => { if (await confirmBox({ title: 'مسح كل البيانات؟', text: 'لا يمكن التراجع. صدّر نسخة احتياطية أولًا.', ok: 'مسح الكل', danger: true })) { S.wipe(); nav.go('/home'); toast('تم المسح'); } },
   'seed-demo': async () => { if (!S.generators().length || await confirmBox({ title: 'تحميل بيانات تجريبية؟', text: 'ستُضاف إلى بياناتك الحالية.', ok: 'تحميل' })) { S.seedDemo(); nav.go('/home'); toast('تم تحميل بيانات تجريبية'); } },
 };
 

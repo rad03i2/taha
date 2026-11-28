@@ -23,6 +23,7 @@ create table if not exists public.users (
   locked_until timestamptz,
   created_at timestamptz not null default now()
 );
+alter table public.users add column if not exists perms jsonb not null default '{}'::jsonb;
 create table if not exists public.sessions (
   token_hash text primary key,
   user_id uuid not null references public.users(id) on delete cascade,
@@ -38,6 +39,16 @@ create table if not exists public.records (
   primary key (ws, kind, id)
 );
 create index if not exists records_ws_updated on public.records (ws, updated_at);
+-- رموز إشعارات الهاتف (FCM). الدالة المرسِلة (Edge Function) تقرؤها بمفتاح الخدمة فقط.
+create table if not exists public.push_tokens (
+  token text primary key,
+  user_id uuid not null references public.users(id) on delete cascade,
+  ws text not null,
+  updated_at timestamptz not null default now()
+);
+create index if not exists push_tokens_ws on public.push_tokens (ws);
+alter table public.push_tokens enable row level security;
+revoke all on public.push_tokens from anon, authenticated;
 
 alter table public.workspaces enable row level security;
 alter table public.users enable row level security;
@@ -75,7 +86,7 @@ end $$;
 
 create or replace function public._user_json(u public.users) returns jsonb
 language sql immutable as $$
-  select jsonb_build_object('id', u.id, 'ws', u.ws, 'username', u.username, 'display', u.display, 'role', u.role, 'active', u.active)
+  select jsonb_build_object('id', u.id, 'ws', u.ws, 'username', u.username, 'display', u.display, 'role', u.role, 'active', u.active, 'perms', u.perms)
 $$;
 
 revoke execute on function public._h(text), public._auth(text), public._need(text, boolean), public._new_session(uuid), public._user_json(public.users) from public, anon, authenticated;
@@ -133,20 +144,32 @@ begin
   return coalesce((select jsonb_agg(_user_json(x) order by x.role, x.created_at) from users x where x.ws = u.ws), '[]'::jsonb);
 end $$;
 
-create or replace function public.user_create(p_token text, p_username text, p_password text, p_display text)
+-- نُسخ الدوال القديمة (بلا صلاحيات) تُحذف حتى لا يحدث التباس في الاستدعاء
+drop function if exists public.user_create(text, text, text, text);
+drop function if exists public.user_update(text, uuid, text, text, boolean);
+
+-- الصلاحيات المعروفة فقط، وقيم منطقية فقط (غير المذكور = مفعّل)
+create or replace function public._clean_perms(p jsonb) returns jsonb
+language sql immutable as $$
+  select coalesce(jsonb_object_agg(k, (v)::boolean) filter (where k in ('pay','subs','debts','notes','books','data') and jsonb_typeof(v) = 'boolean'), '{}'::jsonb)
+  from jsonb_each(case when jsonb_typeof(p) = 'object' then p else '{}'::jsonb end) as t(k, v)
+$$;
+revoke execute on function public._clean_perms(jsonb) from public, anon, authenticated;
+
+create or replace function public.user_create(p_token text, p_username text, p_password text, p_display text, p_perms jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare m users := _need(p_token, true); n users; uname text := lower(trim(p_username));
 begin
   if uname !~ '^[a-z0-9_.]{3,30}$' then raise exception 'bad username'; end if;
   if length(coalesce(p_password, '')) < 6 then raise exception 'weak password'; end if;
   if exists (select 1 from users where username = uname) then raise exception 'username taken'; end if;
-  insert into users(ws, username, display, role, pass_hash)
-  values (m.ws, uname, left(coalesce(nullif(trim(p_display), ''), uname), 60), 'supervisor', extensions.crypt(p_password, extensions.gen_salt('bf'))) returning * into n;
+  insert into users(ws, username, display, role, pass_hash, perms)
+  values (m.ws, uname, left(coalesce(nullif(trim(p_display), ''), uname), 60), 'supervisor', extensions.crypt(p_password, extensions.gen_salt('bf')), _clean_perms(p_perms)) returning * into n;
   return _user_json(n);
 end $$;
 
--- تعديل مشرف: الاسم، كلمة المرور (اختيارية)، التفعيل (اختياري). تغيير كلمة المرور أو التعطيل يُنهي جلساته.
-create or replace function public.user_update(p_token text, p_user uuid, p_display text, p_password text, p_active boolean)
+-- تعديل مشرف: الاسم، كلمة المرور (اختيارية)، التفعيل (اختياري)، الصلاحيات (اختيارية). تغيير كلمة المرور أو التعطيل يُنهي جلساته.
+create or replace function public.user_update(p_token text, p_user uuid, p_display text, p_password text, p_active boolean, p_perms jsonb default null)
 returns jsonb language plpgsql security definer set search_path = public, extensions as $$
 declare m users := _need(p_token, true); t users;
 begin
@@ -157,13 +180,37 @@ begin
   update users set
     display = coalesce(nullif(trim(p_display), ''), display),
     pass_hash = case when p_password is not null then extensions.crypt(p_password, extensions.gen_salt('bf')) else pass_hash end,
-    active = coalesce(p_active, active)
+    active = coalesce(p_active, active),
+    perms = case when p_perms is not null and role = 'supervisor' then _clean_perms(p_perms) else perms end
   where id = t.id returning * into t;
   if p_password is not null or p_active is false then delete from sessions where user_id = t.id; end if;
   return _user_json(t);
 end $$;
 
+-- ───── إشعارات الهاتف: تسجيل رمز الجهاز ─────
+create or replace function public.push_register(p_token text, p_fcm text)
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare u users := _need(p_token);
+begin
+  if length(coalesce(p_fcm, '')) < 20 then raise exception 'bad token'; end if;
+  insert into push_tokens(token, user_id, ws) values (p_fcm, u.id, u.ws)
+  on conflict (token) do update set user_id = excluded.user_id, ws = excluded.ws, updated_at = now();
+end $$;
+create or replace function public.push_unregister(p_token text, p_fcm text)
+returns void language plpgsql security definer set search_path = public, extensions as $$
+declare u users := _need(p_token);
+begin delete from push_tokens where token = p_fcm and user_id = u.id; end $$;
+
 -- ───── المزامنة ─────
+create or replace function public._perm_of(k text) returns text
+language sql immutable as $$
+  select case k
+    when 'records' then 'pay' when 'receipts' then 'pay'
+    when 'subscribers' then 'subs' when 'connections' then 'subs' when 'cabinets' then 'subs' when 'phases' then 'subs' when 'generators' then 'subs'
+    when 'debts' then 'debts' when 'notes' then 'notes' when 'ledger' then 'books' when 'parties' then 'books'
+    else null end
+$$;
+revoke execute on function public._perm_of(text) from public, anon, authenticated;
 create or replace function public.sync_pull(p_token text, p_since timestamptz)
 returns jsonb language plpgsql stable security definer set search_path = public, extensions as $$
 declare u users := _need(p_token); res jsonb;
@@ -185,8 +232,9 @@ declare u users := _need(p_token); it jsonb; n int := 0;
 begin
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) > 500 then raise exception 'bad batch'; end if;
   for it in select * from jsonb_array_elements(p_items) loop
-    -- التسعيرات وإعدادات المبلغ للمدير فقط (يُتجاهل ما يرسله المشرف دون خطأ)
+    -- التسعيرات وإعدادات المبلغ للمدير فقط، وباقي الأنواع حسب صلاحيات المشرف (يُتجاهل غير المسموح دون خطأ)
     if (it->>'kind') in ('prices', 'settings') and u.role <> 'manager' then continue; end if;
+    if u.role <> 'manager' and coalesce(u.perms ->> _perm_of(it->>'kind'), 'true') = 'false' then continue; end if;
     insert into records(ws, kind, id, data, ts)
     values (u.ws, it->>'kind', it->>'id', it->'data', (it->>'ts')::bigint)
     on conflict (ws, kind, id) do update
@@ -199,6 +247,7 @@ end $$;
 
 grant execute on function
   public.setup_workspace(text, text, text, text), public.login(text, text), public.me(text), public.logout(text),
-  public.users_list(text), public.user_create(text, text, text, text), public.user_update(text, uuid, text, text, boolean),
+  public.users_list(text), public.user_create(text, text, text, text, jsonb), public.user_update(text, uuid, text, text, boolean, jsonb),
+  public.push_register(text, text), public.push_unregister(text, text),
   public.sync_pull(text, timestamptz), public.sync_push(text, jsonb)
 to anon, authenticated;

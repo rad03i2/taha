@@ -1,4 +1,7 @@
 // أدوات مساعدة عامة: معرّفات، تهريب نصوص، تواريخ الأشهر، تنسيق الأرقام
+// العملة ثابتة: الدينار العراقي
+export const CUR = 'د.ع';
+
 export const uid = () =>
   (globalThis.crypto && crypto.randomUUID)
     ? crypto.randomUUID()

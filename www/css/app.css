@@ -428,3 +428,25 @@ button, [data-act], a { touch-action: manipulation; }
 .prow.fut { opacity: .8; }
 .banner.info { cursor: pointer; }
 .li .grow b { white-space: normal; line-height: 1.45; }
+
+/* ═════════ الإصدار 1.2 ═════════ */
+.mt .at { font-style: normal; font-size: 9px; line-height: 1.2; opacity: .8; direction: ltr; unicode-bidi: isolate; white-space: nowrap; }
+.mt .by.cx { color: var(--bad); }
+.mt.unpaid .at, .mt.future .at { color: var(--bad); }
+.mt { min-height: 78px; }
+/* مفتاح تبديل */
+.sw { position: relative; width: 46px; height: 28px; border-radius: 99px; background: var(--line); flex: none; transition: background .2s; }
+.sw::after { content: ""; position: absolute; top: 3px; inset-inline-start: 3px; width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); transition: transform .2s cubic-bezier(.3, .9, .3, 1.2); }
+.sw.on, input:checked + .sw { background: var(--ok); }
+.sw.on::after, input:checked + .sw::after { transform: translateX(-18px); }
+.permrow { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.permlist .permrow:first-child { border-top: 0; }
+.permrow input { position: absolute; opacity: 0; pointer-events: none; }
+.permrow .grow b, .permrow .grow small { white-space: normal; }
+.adv .permrow:first-of-type { border-top: 0; }
+/* اختيار نمط الصوت */
+.rad { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); flex: none; display: grid; place-items: center; transition: border-color .15s; }
+.snd.on .rad { border-color: var(--primary); }
+.snd.on .rad::after { content: ""; width: 11px; height: 11px; border-radius: 50%; background: var(--primary); }
+.snd.on b { color: var(--primary); }
+input.vol { width: 100%; height: 36px; accent-color: var(--primary); margin: 4px 0 0; }

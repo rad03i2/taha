@@ -1,13 +1,15 @@
 // نقطة الدخول: التوجيه، الرسم، الأحداث، زر الرجوع، المظهر
 import { debounce } from './util.js';
 import * as S from './store.js';
-import { applyDigits, closeSheet, sheetOpen, icon, toast } from './ui.js';
+import { applyDigits, closeSheet, sheetOpen, icon, toast, hideToast } from './ui.js';
 import { nav } from './nav.js';
 import { routes, ui, resetViewState, cabinetList, subsList, loginView, syncCard } from './views.js';
 import { actions, handleSubmit, holdInfo, holdDone } from './forms.js';
 import * as SY from './sync.js';
 import { initHold, hold } from './hold.js';
-import { unlockAudio, wireTapSounds } from './fx.js';
+import { unlockAudio, wireTapSounds, sfx } from './fx.js';
+import { ACT, FORM, ROUTE } from './perms.js';
+import { enablePush, askPowerOnce, pushCardHtml, hasNative } from './push.js';
 
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabbar');
@@ -46,7 +48,8 @@ function render(keepScroll) {
     resetViewState(); lastRoute = key;
   }
   const gate = SY.gateRequired();
-  const fn = gate ? loginView : routes[r.name] || routes.home;
+  const need = ROUTE[r.name];
+  const fn = gate ? loginView : (need && !SY.can(need)) ? routes.home : routes[r.name] || routes.home;
   if (!gate && r.name === 'log') S.clearUnread();
   const out = fn({ id: r.id });
   current = out;
@@ -57,6 +60,8 @@ function render(keepScroll) {
   document.title = 'حسابات المولدة';
   window.scrollTo(0, y);
   mountLive(out.live);
+  applyPerms();
+  fillPush();
   if (out.live === 'team' && !SY.teamList()) SY.loadTeam();
   applyTheme();
 }
@@ -77,6 +82,29 @@ function schedule(keep = true, soft = false) {
 const flushDeferred = () => setTimeout(() => { if (deferred && !hold.active && !typing()) schedule(true, false); }, 450);
 document.addEventListener('focusout', flushDeferred);
 document.addEventListener('pointerup', flushDeferred);
+
+// إخفاء الأزرار المقابلة للصلاحيات الموقوفة (تُشتق من جدول perms.js)
+let permSig = '';
+function applyPerms() {
+  const off = ['pay', 'subs', 'debts', 'notes', 'books', 'data'].filter((k) => !SY.can(k));
+  const sig = off.join(',');
+  if (sig === permSig) return; permSig = sig;
+  const sels = [];
+  for (const k of off) {
+    Object.keys(ACT).filter((a) => ACT[a] === k).forEach((a) => sels.push(`[data-act="${a}"]`));
+    Object.keys(ROUTE).filter((r) => ROUTE[r] === k).forEach((r) => sels.push(`[data-to="/${r}"]`));
+  }
+  let st = document.getElementById('perm-css');
+  if (!st) { st = document.createElement('style'); st.id = 'perm-css'; document.head.appendChild(st); }
+  st.textContent = sels.length ? `${sels.join(',')}{display:none!important}` : '';
+}
+// بطاقة الإشعارات خارج التطبيق في «المزيد» (أندرويد فقط)
+async function fillPush() {
+  const slot = document.getElementById('push-slot');
+  if (!slot || !hasNative()) return;
+  const h = await pushCardHtml();
+  if (document.getElementById('push-slot') === slot) slot.innerHTML = h;
+}
 
 function mountLive(kind) {
   if (!kind) return;
@@ -117,6 +145,8 @@ document.addEventListener('click', (e) => {
   const fn = actions[el.dataset.act];
   if (!fn) return;
   e.preventDefault();
+  const need = ACT[el.dataset.act];
+  if (need && !SY.can(need)) { toast('ليست لديك صلاحية لهذا الإجراء'); return; }
   if (el.dataset.close && sheetOpen()) { const snap = { dataset: { ...el.dataset } }; closeSheet(); setTimeout(() => fn(snap), 230); return; }
   fn(el, e);
 });
@@ -124,6 +154,8 @@ document.addEventListener('submit', (e) => {
   const f = e.target.closest('form[data-form]');
   if (!f) return;
   e.preventDefault();
+  const fneed = FORM[f.dataset.form];
+  if (fneed && !SY.can(fneed)) { toast('ليست لديك صلاحية لهذا الإجراء'); return; }
   if (f.dataset.form === 'prompt') { const fd = new FormData(f); const ok = f._save(fd.get('v')); if (ok !== false) closeSheet(); return; }
   handleSubmit(f);
 });
@@ -135,8 +167,18 @@ document.addEventListener('click', (e) => {
   inp.value = Math.max(0.5, Math.round((v + Number(b.dataset.step)) * 2) / 2);
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
+// مستوى الصوت: أثناء السحب نحدّث القيمة فقط، وعند الإفلات نحفظ ونُسمعك نقرة
+document.addEventListener('input', (e) => {
+  const r = e.target.closest && e.target.closest('[data-vol]'); if (!r) return;
+  S.settings().volume = r.value / 100;
+  const v = document.getElementById('vol-v'); if (v) v.textContent = `${r.value}%`;
+});
+document.addEventListener('change', (e) => {
+  const r = e.target.closest && e.target.closest('[data-vol]'); if (!r) return;
+  S.setSetting('volume', r.value / 100); sfx.preview('touch', S.settings().sndTouch || 'soft');
+});
 
-window.addEventListener('hashchange', () => { while (closeSheet()); cancelAnimationFrame(rafId); rafId = 0; render(false); });
+window.addEventListener('hashchange', () => { hideToast(); while (closeSheet()); cancelAnimationFrame(rafId); rafId = 0; render(false); });
 nav.rerender = () => schedule(true);
 S.onChange((src) => schedule(true, src === 'remote'));
 
@@ -174,5 +216,6 @@ function wireNative() {
   const sp = document.getElementById('splash');
   if (sp) { sp.classList.add('out'); setTimeout(() => sp.remove(), 260); }
   setTimeout(() => SY.start(), 250); // بعد أول رسم: لا نؤخر ظهور الشاشة
+  if (SY.user()) setTimeout(() => enablePush({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)), 1200);
   window.__gl = { S, ui, nav, SY }; // للاختبار والتشخيص
 })();

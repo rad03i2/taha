@@ -11,7 +11,9 @@
 - `www/js/forms.js` — النماذج والشيتات و`actions` (التفويض عبر `data-act`) و`forms` (عبر `data-form`).
 - `www/js/app.js` — الموجّه (hash routing)، الرسم، الأحداث العامة، زر الرجوع في أندرويد، الإقلاع (`window.__gl` للاختبار).
 - `www/js/sync.js` — الحسابات والمزامنة مع Supabase عبر RPC فقط، مع قناة Realtime (Broadcast) لإشارة لحظية بلا بيانات، واستطلاع احتياطي.
-- `www/js/fx.js` — أصوات (WebAudio) واهتزاز. `www/js/hold.js` — الضغط المطوّل على شهر المشترك (دائرة تقدّم في المنتصف).
+- `www/js/perms.js` — صلاحيات المشرف (جداول الإجراء/النموذج/المسار/نوع السجل ← الصلاحية). `www/js/push.js` — إشعارات الهاتف (FCM) واستثناء البطارية.
+- `supabase/functions/push/index.ts` — دالة Edge ترسل إشعار FCM لبقية الفريق (تحتاج سر FCM_SERVICE_ACCOUNT وتعطيل Verify JWT).
+- `www/js/fx.js` — أصوات (WebAudio) بأنماط متعددة واهتزاز. `www/js/hold.js` — الضغط المطوّل على شهر المشترك (دائرة تقدّم في المنتصف).
 - `www/js/config.js` — `SUPABASE_URL` و`SUPABASE_KEY` (anon). فارغان = وضع محلي بدون حسابات.
 - `supabase/schema.sql` — جداول ودوال الحسابات والمزامنة (آمن لإعادة التشغيل).
 - `.github/workflows/build-apk.yml` + `scripts/patch-android.sh` + `branding/` — بناء APK (debug موقّع بمفتاح ثابت) ونشره في GitHub Releases.
@@ -19,6 +21,9 @@
 ## قرارات تصميم مهمة
 - التسعير شهري: سجلات `prices` (`id=p-YYYY-MM`, `price`, `byGen`)؛ الشهر بلا سجل يرث أقرب شهر سابق، ثم `settings.pricePerAmp` القديم. المدير فقط يحرّرها (واجهة `/prices`، وفي الخادم `sync_push` يتجاهل `prices`/`settings` من المشرف). `dueOf(sub, ym)`. التسديدات المسجّلة تبقى بمبلغها المثبّت (`records[].due`).
 - كل حركة تسجّل صاحبها: `by` و`createdBy`، وسجل النشاط `log` فيه `subId` و`k` (pay/cancel/note/debt/sub/price). الإشعار الداخلي (`ui.banner`) يُعرض لحركات الآخرين عند السحب.
+- الصلاحيات: `users.perms` (غير المذكور = مفعّل): pay, subs, debts, notes, books, data. تُخفى الأزرار من `applyPerms()` في app.js ويرفض الخادم `sync_push` الأنواع غير المسموحة. التسعيرة يراها المشرف ولا يعدّلها أبدًا.
+- العملة د.ع ثابتة (`CUR` في util.js)، والأرقام لاتينية، ولا يوجد «مسح كل البيانات».
+- إشعارات الهاتف: `PUSH` في config.js يضبطه سكربت البناء true عند وجود `branding/google-services.json`. الإضافة الأصلية `GLPower` (Java) يولّدها `scripts/patch-android.sh`.
 - الشهر في شاشة المشترك: نقر سريع يفتح نافذة الدفع، وضغط مطوّل ~1 ثانية يسدّد/يلغي.
 - التحديثات القادمة من المزامنة لا تُرسم أثناء الكتابة أو الضغط المطوّل (`schedule(soft)` في app.js).
 - نموذج البيانات جاهز للمزامنة: كل سجل له `id` (uuid) و`createdAt` و`updatedAt` و`by` و`deleted` (حذف ناعم). الأحدث (`updatedAt`) يفوز.

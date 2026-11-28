@@ -2,7 +2,7 @@
 import * as S from './store.js';
 import { toast, banner } from './ui.js';
 import { nav } from './nav.js';
-import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY, PUSH } from './config.js';
 
 export const available = () => !!(SUPABASE_URL && SUPABASE_KEY);
 export const cfg = () => S.syncState().cfg;
@@ -10,6 +10,9 @@ export const user = () => (cfg() ? cfg().user : null);
 export const gateRequired = () => available() && !cfg();
 export const role = () => (cfg() ? cfg().user.role : 'manager'); // بدون سحابة = مدير محلي
 export const isManager = () => role() === 'manager';
+// صلاحيات المشرف: المدير (أو الوضع المحلي) يملك الكل، والمشرف كل شيء ما لم يوقفه المدير
+export const perms = () => (cfg() && cfg().user.perms) || {};
+export const can = (k) => !available() || !cfg() || isManager() || perms()[k] !== false;
 
 const st = { state: 'idle', at: 0, err: '', busy: false };
 const subs = new Set();
@@ -85,7 +88,22 @@ export async function setup({ name, display, username, password }) {
   adopt(r);
   rt.open(); syncNow();
 }
+// رمز جهاز الإشعارات (FCM): يُسجَّل لحساب المستخدم الحالي فقط
+export const registerPush = (fcm) => (cfg() ? authed('push_register', { p_fcm: fcm }).catch(() => {}) : null);
+// يرسل إشعارًا لهواتف بقية الفريق عبر دالة Edge (لا يحمل بيانات حساسة سوى نص الحركة)
+function notifyPhones(items) {
+  if (!PUSH || !cfg()) return;
+  const me = S.settings().user || ''; const now = Date.now();
+  const mine = items.filter((i) => i.kind === 'log' && i.data && i.data.by === me && now - (i.data.at || 0) < 120000);
+  if (!mine.length) return;
+  const f = mine[0].data;
+  fetch(`${SUPABASE_URL}/functions/v1/push`, {
+    method: 'POST', headers: HEADERS,
+    body: JSON.stringify({ p_token: cfg().token, title: me || 'حسابات المولدة', body: mine.length > 1 ? `${mine.length} حركات جديدة — آخرها: ${f.text}` : f.text, data: { subId: f.subId || '', k: f.k || '' } }),
+  }).catch(() => {});
+}
 export async function logout() {
+  try { const t = localStorage.getItem('gl.fcm'); if (cfg() && t) await authed('push_unregister', { p_fcm: t }); } catch (e) { /* نتجاهل */ }
   try { if (cfg()) await authed('logout', {}); } catch (e) { /* نتجاهل */ }
   rt.close(); S.setSyncCfg(null); team = null; set({ state: 'idle', err: '', at: 0 });
 }
@@ -93,7 +111,7 @@ export async function refreshMe() {
   if (!cfg()) return;
   try {
     const u = await authed('me', {});
-    if (u && (u.role !== cfg().user.role || u.display !== cfg().user.display)) {
+    if (u && (u.role !== cfg().user.role || u.display !== cfg().user.display || JSON.stringify(u.perms || {}) !== JSON.stringify(cfg().user.perms || {}))) {
       S.setSyncCfg({ ...cfg(), user: u }); S.setSetting('user', u.display);
     }
   } catch (e) { expired(e); }
@@ -109,8 +127,8 @@ export async function loadTeam() {
 const teamCall = async (fn, body) => {
   try { const r = await authed(fn, body); await loadTeam(); return r; } catch (e) { if (expired(e)) throw new Error(MSG.forbidden); throw new Error(friendly(e)); }
 };
-export const createSupervisor = ({ username, password, display }) => teamCall('user_create', { p_username: username, p_password: password, p_display: display });
-export const updateUser = (id, { display = null, password = null, active = null }) => teamCall('user_update', { p_user: id, p_display: display, p_password: password, p_active: active });
+export const createSupervisor = ({ username, password, display, perms = {} }) => teamCall('user_create', { p_username: username, p_password: password, p_display: display, p_perms: perms });
+export const updateUser = (id, { display = null, password = null, active = null, perms = null }) => teamCall('user_update', { p_user: id, p_display: display, p_password: password, p_active: active, p_perms: perms });
 
 /* ───── الدفع والسحب ───── */
 async function push() {
@@ -120,6 +138,7 @@ async function push() {
     await authed('sync_push', { p_items: items.map(({ kind, id, ts, data }) => ({ kind, id, ts, data })) });
     S.markPushed(items);
     rt.ping();
+    notifyPhones(items);
   }
 }
 // إشعار بما سجّله الآخرون: بنفس شكل إشعارات الهاتف، وبالنقر ينتقل لما تغيّر

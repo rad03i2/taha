@@ -1,8 +1,8 @@
 // المخزن: كل البيانات في الذاكرة + حفظ تلقائي في IndexedDB.
 // كل سجل له id فريد وتاريخ تعديل وعلامة حذف ناعم، ليصلح للمزامنة السحابية لاحقًا.
-import { uid, ymNow, ymIdx, ymRange, normDigits, parseNum, fmtNum } from './util.js';
+import { uid, ymNow, ymIdx, ymRange, normDigits, parseNum, fmtNum, CUR } from './util.js';
 
-const fmtMoney = (n) => `${fmtNum(n)} ${db ? db.settings.currency || 'د.ع' : ''}`.trim();
+const fmtMoney = (n) => `${fmtNum(n)} ${CUR}`;
 
 const DB_NAME = 'generator-ledger';
 const STORE = 'kv';
@@ -18,7 +18,7 @@ const blank = () => ({
   v: 1,
   deviceId: uid(),
   createdAt: Date.now(),
-  settings: { pricePerAmp: 0, currency: 'د.ع', digits: 'latin', theme: 'auto', user: '', onboarded: false, sound: true },
+  settings: { pricePerAmp: 0, theme: 'auto', user: '', onboarded: false, sound: true, haptic: true, volume: 0.8, sndTouch: 'soft', sndNotify: 'chime', sndDone: 'cheer' },
   generators: [],
   phases: [],
   cabinets: [],
@@ -86,6 +86,7 @@ export async function load() {
 function migrate(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
+  delete out.settings.currency; delete out.settings.digits;
   for (const k of ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'log', 'receipts', 'ledger', 'parties', 'prices']) {
     if (!Array.isArray(out[k])) out[k] = [];
   }
@@ -105,7 +106,7 @@ function changed(src) {
 export const onChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
 
 /* ───────── أساسيات ───────── */
-const SHARED_SETTINGS = ['pricePerAmp', 'currency'];
+const SHARED_SETTINGS = ['pricePerAmp'];
 export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log', 'receipts', 'ledger', 'parties', 'prices'];
 export const settings = () => db.settings;
 export const raw = () => db;
@@ -228,6 +229,8 @@ export function rec(subId, ym) {
   const r = db.records[`${subId}|${ym}`];
   return r && !r.deleted ? r : null;
 }
+// السجل حتى لو أُلغي (لعرض من ألغى ومتى)
+export const recAny = (subId, ym) => db.records[`${subId}|${ym}`] || null;
 export const paidOf = (subId, ym) => (rec(subId, ym) ? rec(subId, ym).paid || 0 : 0);
 export function monthDue(sub, ym) { const r = rec(sub.id, ym); return r ? r.due || 0 : dueOf(sub, ym); }
 export const remainOf = (sub, ym) => Math.max(0, monthDue(sub, ym) - paidOf(sub.id, ym));
@@ -356,7 +359,7 @@ export function unpayMonth(subId, ym) {
   const r = db.records[k];
   if (!r || r.deleted) return null;
   const prev = { [k]: { ...r } };
-  r.deleted = true; r.updatedAt = Date.now();
+  r.deleted = true; r.updatedAt = Date.now(); r.cx = { by: db.settings.user || '', at: r.updatedAt };
   const rc = add('receipts', { subId, kind: 'cancel', amount: -(r.paid || 0), items: [{ ym, amount: -(r.paid || 0) }], at: Date.now() });
   prev.__receipt = rc.id;
   logAct(`إلغاء تسديد شهر ${ym} — ${ix().sub.get(subId)?.name || ''}`, subId, 'cancel');
@@ -453,14 +456,6 @@ export function importJSON(text) {
   logAct('استيراد نسخة احتياطية');
   changed();
 }
-export function wipe() {
-  const s = db.settings; const keep = db.sync;
-  db = blank();
-  db.sync = { cfg: keep.cfg, pushed: {}, lastPull: '' };
-  db.settings = { ...db.settings, user: s.user, theme: s.theme, digits: s.digits, currency: s.currency };
-  changed();
-}
-
 /* ───────── استيراد نصي سريع ───────── */
 // سطر مثل:  26 محمود الكعبي 6
 export function parseQuick(text) {
@@ -551,7 +546,7 @@ export function dirtyItems(limit = 400) {
     if (out.length >= limit) break;
   }
   if (db.settingsAt) {
-    const x = { id: 'shared', pricePerAmp: db.settings.pricePerAmp, currency: db.settings.currency, updatedAt: db.settingsAt };
+    const x = { id: 'shared', pricePerAmp: db.settings.pricePerAmp, updatedAt: db.settingsAt };
     consider('settings', x);
   }
   return out.slice(0, limit);
@@ -570,7 +565,7 @@ export function applyRemote(items, { notify = false } = {}) {
     const ts = tsOf(data);
     db.sync.pushed[`${kind}|${data.id}`] = ts;
     if (kind === 'settings') {
-      if (ts > (db.settingsAt || 0)) { db.settings.pricePerAmp = data.pricePerAmp; db.settings.currency = data.currency; db.settingsAt = ts; n++; }
+      if (ts > (db.settingsAt || 0)) { db.settings.pricePerAmp = data.pricePerAmp; db.settingsAt = ts; n++; }
     } else if (kind === 'records') {
       const cur = db.records[data.id];
       if (!cur || ts > tsOf(cur)) { db.records[data.id] = data; n++; }
