@@ -37,7 +37,7 @@ P
 M=$A/app/src/main/AndroidManifest.xml
 grep -q 'android.permission.VIBRATE' "$M" || sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />#' "$M"
 # permissions: vibration, notifications (Android 13+), battery exemption, background service, start after boot
-for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE RECEIVE_BOOT_COMPLETED; do
+for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE RECEIVE_BOOT_COMPLETED REQUEST_INSTALL_PACKAGES; do
   grep -q "android.permission.$PERM\"" "$M" || sed -i "s#<uses-permission android:name=\"android.permission.INTERNET\" />#<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.$PERM\" />#" "$M"
 done
 
@@ -67,6 +67,16 @@ p = sys.argv[1]
 s = open(p).read()
 if 'okhttp' not in s:
     s = re.sub(r'(?m)^dependencies \{', "dependencies {\n    implementation 'com.squareup.okhttp3:okhttp:4.12.0'", s, count=1)
+open(p, 'w').write(s)
+PY
+
+# versionCode = build number, so each release is a proper update over the previous one
+python3 - "$A/app/build.gradle" "${GL_BUILD:-1}" <<'PY'
+import re, sys
+p, b = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = re.sub(r'versionCode \d+', 'versionCode ' + b, s, count=1)
+s = re.sub(r'versionName "[^"]*"', 'versionName "1.2.' + b + '"', s, count=1)
 open(p, 'w').write(s)
 PY
 

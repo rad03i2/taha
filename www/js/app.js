@@ -1,10 +1,11 @@
 // نقطة الدخول: التوجيه، الرسم، الأحداث، زر الرجوع، المظهر
 import { debounce } from './util.js';
 import * as S from './store.js';
-import { applyDigits, closeSheet, sheetOpen, icon, toast, hideToast } from './ui.js';
+import { applyDigits, closeSheet, sheetOpen, icon, toast, hideToast, banner } from './ui.js';
 import { nav } from './nav.js';
 import { routes, ui, resetViewState, cabinetList, subsList, loginView, syncCard } from './views.js';
-import { actions, handleSubmit, holdInfo, holdDone } from './forms.js';
+import { actions, handleSubmit, holdInfo, holdDone, updateSheet } from './forms.js';
+import { silentCheck } from './update.js';
 import * as SY from './sync.js';
 import { initHold, hold } from './hold.js';
 import { unlockAudio, wireTapSounds, sfx } from './fx.js';
@@ -218,6 +219,7 @@ function wireNative() {
   setTimeout(() => SY.start(), 250); // بعد أول رسم: لا نؤخر ظهور الشاشة
   if (SY.user()) setTimeout(() => startWatch({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)), 1200);
   takeRoute();
+  if (hasNative()) setTimeout(async () => { const u = await silentCheck(); if (u) banner({ title: 'تحديث جديد متوفر', body: `الإصدار ${u.build} جاهز. اضغط لتنزيله وتثبيته.`, ic: 'download', onTap: () => updateSheet(u) }); }, 4000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) takeRoute(); });
   window.__gl = { S, ui, nav, SY }; // للاختبار والتشخيص
 })();

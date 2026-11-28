@@ -18,7 +18,11 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Add Android platform
         run: npx cap add android
+      - name: Stamp build number
+        run: echo "export const BUILD = ${{ github.run_number }};" > www/js/version.js
       - name: Patch project
+        env:
+          GL_BUILD: ${{ github.run_number }}
         run: ./scripts/patch-android.sh
       - name: Sync web assets
         run: npx cap sync android
@@ -48,6 +52,9 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           TAG="build-${{ github.run_number }}"
-          gh release create "$TAG" out/hesabat-almolada.apk --title "APK $TAG" --notes "Debug-signed build of commit ${{ github.sha }}" --latest
+          NOTES="$(printf '%s' "$COMMIT_MSG" | head -n 12)"
+          [ -n "$NOTES" ] || NOTES="Debug-signed build of commit ${{ github.sha }}"
+          gh release create "$TAG" out/hesabat-almolada.apk --title "APK $TAG" --notes "$NOTES" --latest

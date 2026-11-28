@@ -8,6 +8,12 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.PowerManager;
 import android.provider.Settings;
+import androidx.core.content.FileProvider;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -120,5 +126,84 @@ public class GLPowerPlugin extends Plugin {
     r.put("route", pendingRoute == null ? "" : pendingRoute);
     pendingRoute = null;
     call.resolve(r);
+  }
+
+  // ───── تحديث التطبيق من GitHub: تنزيل ملف APK ثم تثبيته ─────
+  private File apkFile() {
+    File d = new File(getContext().getCacheDir(), "updates");
+    d.mkdirs();
+    return new File(d, "update.apk");
+  }
+
+  @PluginMethod
+  public void downloadApk(final PluginCall call) {
+    final String url = call.getString("url", "");
+    if (!url.startsWith("https://")) { call.reject("bad url"); return; }
+    new Thread(new Runnable() {
+      @Override public void run() {
+        HttpURLConnection c = null;
+        try {
+          c = (HttpURLConnection) new URL(url).openConnection();
+          c.setInstanceFollowRedirects(true);
+          c.setConnectTimeout(20000);
+          c.setReadTimeout(30000);
+          c.connect();
+          if (c.getResponseCode() / 100 != 2) { call.reject("http " + c.getResponseCode()); return; }
+          long total = c.getContentLengthLong();
+          File f = apkFile();
+          if (f.exists()) f.delete();
+          InputStream in = c.getInputStream();
+          FileOutputStream out = new FileOutputStream(f);
+          byte[] buf = new byte[32768];
+          long done = 0; int lastPct = -1; int n;
+          while ((n = in.read(buf)) > 0) {
+            out.write(buf, 0, n);
+            done += n;
+            int pct = total > 0 ? (int) (done * 100 / total) : 0;
+            if (pct != lastPct) {
+              lastPct = pct;
+              JSObject o = new JSObject();
+              o.put("pct", pct); o.put("done", done); o.put("total", total);
+              notifyListeners("updateProgress", o);
+            }
+          }
+          out.close(); in.close();
+          JSObject r = new JSObject();
+          r.put("size", f.length());
+          call.resolve(r);
+        } catch (Exception e) {
+          call.reject(String.valueOf(e.getMessage()));
+        } finally {
+          if (c != null) c.disconnect();
+        }
+      }
+    }).start();
+  }
+
+  @PluginMethod
+  public void installApk(PluginCall call) {
+    JSObject r = new JSObject();
+    try {
+      if (Build.VERSION.SDK_INT >= 26 && !getContext().getPackageManager().canRequestPackageInstalls()) {
+        // يحتاج المستخدم السماح لهذا التطبيق بتثبيت التطبيقات (مرة واحدة)
+        Intent i = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+        i.setData(pkg());
+        launch(i);
+        r.put("needPermission", true);
+        call.resolve(r);
+        return;
+      }
+      File f = apkFile();
+      if (!f.exists()) { call.reject("no file"); return; }
+      Uri u = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", f);
+      Intent i = new Intent(Intent.ACTION_VIEW);
+      i.setDataAndType(u, "application/vnd.android.package-archive");
+      i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+      getContext().startActivity(i);
+      r.put("needPermission", false);
+      call.resolve(r);
+    } catch (Exception e) {
+      call.reject(String.valueOf(e.getMessage()));
+    }
   }
 }

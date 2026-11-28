@@ -5,6 +5,7 @@ import * as S from './store.js';
 import { icon, money, moneyShort, ring, bar, empty, chip } from './ui.js';
 import { GROUPS } from './fx.js';
 import { PERMS } from './perms.js';
+import { currentBuild } from './update.js';
 
 const firstName = (n) => String(n || '').trim().split(/\s+/)[0] || '';
 // تاريخ ووقت مصغّران يتسعان داخل مربع الشهر: سطر للتاريخ (سنة/شهر/يوم) وسطر للساعة
@@ -549,7 +550,9 @@ export function more() {
     ${secH('المزامنة السحابية')}
     <div id="sync-slot">${syncCard()}</div>
     <div id="push-slot"></div>
-    <p class="foot">حسابات المولدة · الإصدار 1.1</p>
+    ${secH('التطبيق')}
+    <div class="card list">${setRow('download', 'البحث عن تحديث', `الإصدار الحالي: ${currentBuild() || 'تجريبي'} · يُنزَّل من GitHub ويُثبَّت مباشرة`, 'update-check')}</div>
+    <p class="foot">حسابات المولدة · الإصدار 1.2</p>
   </main>`;
   return { tab: 'more', html };
 }

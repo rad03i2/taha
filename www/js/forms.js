@@ -2,12 +2,13 @@
 import * as SY from './sync.js';
 import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, ymOf, MONTHS, normDigits, parseNum, CUR } from './util.js';
 import * as S from './store.js';
-import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, empty } from './ui.js';
+import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, hideToast, empty } from './ui.js';
 import { nav } from './nav.js';
 import { dt, ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
 import { sfx, haptic, GROUPS } from './fx.js';
 import { PERMS } from './perms.js';
 import { startWatch, stopWatch, askPowerOnce, power } from './push.js';
+import { checkUpdate, downloadAndInstall, install, currentBuild } from './update.js';
 
 const allCabinets = () => {
   const out = [];
@@ -357,6 +358,33 @@ forms.perms = async (fd, form) => {
   try { await SY.updateUser(form.dataset.id, { perms: readPerms(fd) }); closeSheet(); toast('تم حفظ الصلاحيات'); } catch (e) { toast(e.message); btn.disabled = false; }
 };
 
+/* ───────── تحديث التطبيق ───────── */
+const mb = (n) => `${(n / 1048576).toFixed(1)} م.ب`;
+export function updateSheet(u) {
+  hideToast();
+  const w = openSheet(`<h3 class="sh-title">تحديث جديد متوفر</h3>
+    <div class="card" style="box-shadow:none;background:var(--surface2)"><div class="card-hr"><b>الإصدار ${u.build}</b><small>أنت على ${currentBuild() || 'غير معروف'} · ${mb(u.size)}</small></div>
+      ${u.notes ? `<p class="muted sm" style="white-space:pre-wrap;max-height:130px;overflow:auto">${esc(u.notes.slice(0, 700))}</p>` : ''}</div>
+    <div id="upd-prog" hidden><div class="bar"><i style="width:0%"></i></div><p class="hint" id="upd-t"></p></div>
+    <button class="btn primary block lg" id="upd-go">${icon('download')}تنزيل وتثبيت</button>
+    <button class="btn ghost block" id="upd-later">لاحقًا</button>`);
+  const go = w.querySelector('#upd-go'); const prog = w.querySelector('#upd-prog'); const txt = w.querySelector('#upd-t');
+  w.querySelector('#upd-later').onclick = () => closeSheet();
+  const fin = (r) => {
+    go.disabled = false;
+    if (r === 'permission') { txt.textContent = 'فعّل «السماح بالتثبيت من هذا المصدر» ثم ارجع واضغط تثبيت.'; go.innerHTML = `${icon('check')}تثبيت`; go.onclick = async () => { try { fin(await install()); } catch (e) { toast('تعذّر التثبيت'); } }; }
+    else { txt.textContent = r === 'external' ? 'فُتح رابط التنزيل في المتصفح.' : 'اضغط «تثبيت» في نافذة أندرويد لإكمال التحديث.'; go.innerHTML = `${icon('check')}تم`; go.onclick = () => closeSheet(); }
+  };
+  go.onclick = async () => {
+    go.disabled = true; prog.hidden = false; txt.textContent = 'جارٍ التنزيل…';
+    try {
+      const r = await downloadAndInstall(u.url, (pct) => { prog.querySelector('i').style.width = pct + '%'; txt.textContent = `جارٍ التنزيل… ${pct}%`; });
+      prog.querySelector('i').style.width = '100%';
+      fin(r);
+    } catch (e) { go.disabled = false; txt.textContent = 'تعذّر التنزيل. تحقق من الاتصال وأعد المحاولة.'; }
+  };
+}
+
 forms.prompt = (fd, form) => { const ok = form._save(fd.get('v')); if (ok !== false) closeSheet(); };
 
 /* ───────── الإعدادات والبيانات ───────── */
@@ -498,6 +526,13 @@ export const actions = {
     const G = GROUPS[el.dataset.g]; if (!G) return;
     S.setSetting(G.key, el.dataset.id);
     sfx.preview(el.dataset.g, el.dataset.id);
+  },
+  'update-check': async (el) => {
+    toast('جارٍ البحث عن تحديث…');
+    try {
+      const u = await checkUpdate();
+      if (u.newer) updateSheet(u); else toast(`أنت على آخر إصدار (${currentBuild() || u.build})`);
+    } catch (e) { toast('تعذّر الاتصال بـ GitHub'); }
   },
   'watch-toggle': async () => {
     const on = S.settings().watch === false;
