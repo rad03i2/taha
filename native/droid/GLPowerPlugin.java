@@ -113,6 +113,19 @@ public class GLPowerPlugin extends Plugin {
   }
 
   @PluginMethod
+  public void watchStatus(PluginCall call) {
+    SharedPreferences p = getContext().getSharedPreferences(GLWatchService.PREFS, Context.MODE_PRIVATE);
+    JSObject r = new JSObject();
+    r.put("running", GLWatchService.running);
+    r.put("live", GLWatchService.live);
+    r.put("legacy", GLWatchService.legacy);
+    r.put("configured", !p.getString("token", "").isEmpty());
+    r.put("status", p.getString("status", ""));
+    r.put("last", p.getLong("last", 0));
+    call.resolve(r);
+  }
+
+  @PluginMethod
   public void stopWatch(PluginCall call) {
     getContext().getSharedPreferences(GLWatchService.PREFS, Context.MODE_PRIVATE).edit().clear().apply();
     GLWatchService.stop(getContext());

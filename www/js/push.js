@@ -3,11 +3,13 @@ import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 import * as SY from './sync.js';
 import * as S from './store.js';
 import { openSheet, closeSheet, icon } from './ui.js';
+import { timeAgo } from './util.js';
 import { nav } from './nav.js';
 
 const C = () => window.Capacitor;
 const native = () => !!(C() && C().isNativePlatform && C().isNativePlatform());
 const W = () => C() && C().Plugins && C().Plugins.GLPower;
+const esc2 = (s) => s.replace(/[<>&"]/g, '');
 export const hasNative = () => native();
 export const powerReady = () => native() && !!W();
 
@@ -59,11 +61,19 @@ export async function pushCardHtml() {
   const ign = await power.ignoring();
   let granted = false; try { granted = !!(await W().notifState()).granted; } catch (e) { /* لا شيء */ }
   const on = watchOn();
+  let st = {}; try { st = await W().watchStatus(); } catch (e) { /* إصدار قديم */ }
+  const err = String(st.status || '').startsWith('err:');
   const chip = (ok, t) => `<span class="chip ${ok ? 'paid' : 'debt'}">${t}</span>`;
+  const diag = !on ? '' : [
+    chip(!!st.running, st.running ? 'الخدمة تعمل' : 'الخدمة غير شغّالة'),
+    chip(!!st.live, st.live ? 'اتصال لحظي' : 'لا اتصال لحظي بعد'),
+    st.last ? chip(!err, err ? `خطأ في الفحص: ${esc2(String(st.status).slice(4, 60))}` : `آخر فحص ${timeAgo(st.last)}`) : '',
+  ].join('');
   return `<div class="card sync">
     <div class="sync-h">${icon('bell')}<div><b>التنبيهات خارج التطبيق</b><small>تصلك على الهاتف حتى والتطبيق مغلق</small></div></div>
-    <div class="sync-st">${chip(on, on ? 'الخدمة مفعّلة' : 'الخدمة متوقفة')}${chip(granted, granted ? 'إذن الإشعارات ممنوح' : 'إذن الإشعارات غير ممنوح')}${chip(ign, ign ? 'يعمل دون تقييد البطارية' : 'البطارية قد تؤخّر التنبيهات')}</div>
+    <div class="sync-st">${chip(on, on ? 'مفعّلة' : 'متوقفة')}${diag}${chip(granted, granted ? 'إذن الإشعارات ممنوح' : 'إذن الإشعارات غير ممنوح')}${chip(ign, ign ? 'يعمل دون تقييد البطارية' : 'البطارية قد تؤخّر التنبيهات')}</div>
     <div class="btn-row"><button class="btn soft" data-act="watch-toggle">${icon('bell')}${on ? 'إيقاف' : 'تفعيل'}</button><button class="btn soft" data-act="power-request">${icon('battery')}البطارية</button></div>
+    ${on ? `<div class="btn-row"><button class="btn soft" data-act="watch-restart">${icon('clock')}إعادة تشغيل الخدمة وفحص الآن</button></div>` : ''}
     <div class="btn-row"><button class="btn soft" data-act="notif-settings">إعدادات إشعارات الهاتف</button><button class="btn soft" data-act="app-settings">إعدادات التطبيق</button></div>
   </div>`;
 }

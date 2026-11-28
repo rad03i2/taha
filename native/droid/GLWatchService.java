@@ -18,7 +18,11 @@ import android.os.Looper;
 import android.service.notification.StatusBarNotification;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,6 +43,9 @@ import org.json.JSONObject;
  */
 public class GLWatchService extends Service {
   static volatile boolean appVisible = false;
+  static volatile boolean running = false;
+  static volatile boolean live = false;     // قناة Realtime متصلة
+  static volatile boolean legacy = false;   // الخادم بلا notif_pull: نسحب عبر sync_pull
   static final String PREFS = "gl_watch";
   static final String CH_SVC = "gl-service";
   static final String CH_ALERT = "gl-alerts";
@@ -78,6 +85,7 @@ public class GLWatchService extends Service {
   @Override public void onCreate() {
     super.onCreate();
     alive = true;
+    running = true;
     http = new OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).pingInterval(30, TimeUnit.SECONDS).build();
     if (Build.VERSION.SDK_INT >= 24) {
       try {
@@ -107,6 +115,8 @@ public class GLWatchService extends Service {
 
   @Override public void onDestroy() {
     alive = false;
+    running = false;
+    live = false;
     h.removeCallbacksAndMessages(null);
     closeSock();
     io.shutdownNow();
@@ -147,7 +157,7 @@ public class GLWatchService extends Service {
   };
 
   private void closeSock() {
-    joined = false;
+    joined = false; live = false;
     WebSocket s = sock; sock = null;
     if (s != null) { try { s.close(1000, null); } catch (Exception e) { /* لا شيء */ } }
   }
@@ -166,6 +176,7 @@ public class GLWatchService extends Service {
           String ev = m.optString("event");
           if ("phx_reply".equals(ev) && topic.equals(m.optString("topic"))) {
             joined = "ok".equals(m.getJSONObject("payload").optString("status"));
+            live = joined;
             if (joined) { backoff = 2000; pollNow(); }
           } else if ("broadcast".equals(ev)) {
             pollNow();
@@ -180,7 +191,7 @@ public class GLWatchService extends Service {
   private void lost(final WebSocket w) {
     h.post(() -> {
       if (w != sock) return;
-      sock = null; joined = false;
+      sock = null; joined = false; live = false;
       if (alive) { h.postDelayed(this::connect, backoff); backoff = Math.min(backoff * 2, 30000); }
     });
   }
@@ -189,7 +200,7 @@ public class GLWatchService extends Service {
     try { io.execute(this::poll); } catch (Exception e) { /* لا شيء */ }
   }
 
-  private String call(String fn, JSONObject body) throws Exception {
+  private String call(String fn, JSONObject body) throws Exception, Missing {
     Request.Builder rb = new Request.Builder().url(url + "/rest/v1/rpc/" + fn)
         .header("apikey", key)
         .post(RequestBody.create(body.toString(), MediaType.parse("application/json")));
@@ -198,32 +209,79 @@ public class GLWatchService extends Service {
       String t = r.body() != null ? r.body().string() : "";
       if (!r.isSuccessful()) {
         if (t.contains("forbidden")) throw new SecurityException("forbidden");
+        if (r.code() == 404 && t.contains("PGRST202")) throw new Missing();
         throw new Exception("http " + r.code());
       }
       return t;
     }
   }
 
+  private static String iso(long ms) {
+    SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US);
+    f.setTimeZone(TimeZone.getTimeZone("UTC"));
+    return f.format(new Date(ms));
+  }
+
+  private void status(String st) {
+    prefs().edit().putString("status", st).putLong("last", System.currentTimeMillis()).apply();
+  }
+
+  // السحب: notif_pull (خفيف) إن وُجد في الخادم، وإلا sync_pull مع تصفية سجلات النشاط محليًا
   private synchronized void poll() {
     try {
       SharedPreferences p = prefs();
       String cur = p.getString("cursor", "");
-      JSONObject b = new JSONObject();
-      b.put("p_token", token);
-      b.put("p_since", cur.isEmpty() ? JSONObject.NULL : cur);
-      JSONObject r = new JSONObject(call("notif_pull", b));
-      String next = r.isNull("cursor") ? cur : r.optString("cursor", cur);
-      if (!cur.isEmpty()) {
-        JSONArray items = r.optJSONArray("items");
-        if (items != null && items.length() > 0) show(items);
+      if (cur.isEmpty()) {
+        // أول مرة: نبدأ من الآن دون عرض الماضي
+        if (!legacy) {
+          try {
+            JSONObject b0 = new JSONObject(); b0.put("p_token", token); b0.put("p_since", JSONObject.NULL);
+            JSONObject r0 = new JSONObject(call("notif_pull", b0));
+            if (!r0.isNull("cursor")) cur = r0.optString("cursor", "");
+          } catch (Missing m) { legacy = true; }
+        }
+        if (cur.isEmpty()) cur = iso(System.currentTimeMillis());
+        p.edit().putString("cursor", cur).apply();
+        status("ok");
+        return;
       }
+      JSONArray out = new JSONArray();
+      String next = cur;
+      if (!legacy) {
+        try {
+          JSONObject b = new JSONObject(); b.put("p_token", token); b.put("p_since", cur);
+          JSONObject r = new JSONObject(call("notif_pull", b));
+          if (!r.isNull("cursor")) next = r.optString("cursor", cur);
+          JSONArray it = r.optJSONArray("items");
+          if (it != null) out = it;
+        } catch (Missing m) { legacy = true; }
+      }
+      if (legacy) {
+        JSONObject b = new JSONObject(); b.put("p_token", token); b.put("p_since", cur);
+        JSONObject r = new JSONObject(call("sync_pull", b));
+        if (!r.isNull("cursor")) next = r.optString("cursor", cur);
+        JSONArray it = r.optJSONArray("items");
+        String me = p.getString("name", "");
+        for (int i = 0; it != null && i < it.length(); i++) {
+          JSONObject o = it.optJSONObject(i);
+          if (o == null || !"log".equals(o.optString("kind"))) continue;
+          JSONObject d = o.optJSONObject("data");
+          if (d != null && !me.equals(d.optString("by", ""))) out.put(d);
+        }
+      }
+      if (out.length() > 0) show(out);
       if (!next.isEmpty()) p.edit().putString("cursor", next).apply();
+      status("ok");
     } catch (SecurityException e) {
       // انتهت الجلسة: نتوقف ولا نعيد المحاولة
       prefs().edit().clear().apply();
       h.post(this::stopSelf);
-    } catch (Exception e) { /* لا اتصال: نعيد لاحقًا */ }
+    } catch (Exception e) {
+      status("err:" + String.valueOf(e.getMessage()));
+    }
   }
+
+  private static class Missing extends Exception { Missing() { super("missing"); } }
 
   private void show(JSONArray items) {
     if (appVisible) return; // والتطبيق مفتوح يعرض إشعاره الداخلي
