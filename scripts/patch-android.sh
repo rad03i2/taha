@@ -70,9 +70,9 @@ if 'okhttp' not in s:
 open(p, 'w').write(s)
 PY
 
-# native sources (native/android/*)
+# native sources (native/droid/*)
 J=$A/app/src/main/java/com/taha/generator
 mkdir -p "$J" "$RES/drawable"
-cp native/android/*.java "$J/"
-cp native/android/ic_stat_bolt.xml "$RES/drawable/"
+cp native/droid/*.java "$J/"
+cp native/droid/ic_stat_bolt.xml "$RES/drawable/"
 echo "patched"
