@@ -34,13 +34,16 @@ const friendly = (e) => {
   return k ? MSG[k] : 'تعذّر الاتصال بالخادم';
 };
 
+// المفاتيح الجديدة (sb_publishable_…) ليست JWT فلا تُرسل في Authorization؛ المفاتيح القديمة (eyJ…) تُرسل.
+const HEADERS = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json', ...(SUPABASE_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SUPABASE_KEY}` } : {}) };
+
 async function rpc(fn, body, timeout = 20000) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), timeout);
   try {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
       method: 'POST', signal: ctl.signal,
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      headers: HEADERS,
       body: JSON.stringify(body),
     });
     const txt = await r.text();
