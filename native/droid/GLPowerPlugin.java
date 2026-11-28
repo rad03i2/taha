@@ -105,7 +105,8 @@ public class GLPowerPlugin extends Plugin {
         .putString("url", call.getString("url", ""))
         .putString("key", call.getString("key", ""))
         .putString("token", tok)
-        .putString("ws", call.getString("ws", ""));
+        .putString("ws", call.getString("ws", ""))
+        .putString("name", call.getString("name", ""));
     if (!tok.equals(old)) e.remove("cursor");
     e.apply();
     try { GLWatchService.start(getContext()); } catch (Exception ex) { /* الخدمة لا تبدأ من الخلفية */ }
@@ -122,7 +123,24 @@ public class GLPowerPlugin extends Plugin {
     r.put("configured", !p.getString("token", "").isEmpty());
     r.put("status", p.getString("status", ""));
     r.put("last", p.getLong("last", 0));
+    r.put("events", p.getString("events", ""));
+    r.put("notifEnabled", androidx.core.app.NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
+    r.put("chan", GLWatchService.channelImportance(getContext()));
     call.resolve(r);
+  }
+
+  // إشعار تجريبي بعد تأخير: ليتأكد المستخدم أن الهاتف يعرض الإشعار وهو خارج التطبيق
+  @PluginMethod
+  public void testNotify(PluginCall call) {
+    int delay = call.getInt("delay", 10);
+    final Context ctx = getContext();
+    new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
+      @Override public void run() {
+        String r = GLWatchService.notifyStatic(ctx, 9001, "إشعار تجريبي", "إن ظهر هذا الإشعار فعرض إشعارات الهاتف سليم", "/log", System.currentTimeMillis());
+        GLWatchService.ev(ctx, r == null ? "عُرض الإشعار التجريبي" : "فشل الإشعار التجريبي: " + r);
+      }
+    }, delay * 1000L);
+    call.resolve();
   }
 
   @PluginMethod

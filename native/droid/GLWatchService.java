@@ -18,6 +18,7 @@ import android.os.Looper;
 import android.service.notification.StatusBarNotification;
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.NotificationManagerCompat;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -61,6 +62,7 @@ public class GLWatchService extends Service {
   private int seq = 0;
   private String url = "", key = "", token = "", ws = "";
   private ConnectivityManager.NetworkCallback netCb;
+  private long serverMs = 0; // وقت الخادم من ترويسة Date (لتفادي فرق ساعة الهاتف)
 
   static void start(Context c) {
     Intent i = new Intent(c, GLWatchService.class);
@@ -177,6 +179,7 @@ public class GLWatchService extends Service {
           if ("phx_reply".equals(ev) && topic.equals(m.optString("topic"))) {
             joined = "ok".equals(m.getJSONObject("payload").optString("status"));
             live = joined;
+            ev(GLWatchService.this, joined ? "القناة اللحظية متصلة" : "رفض الانضمام للقناة");
             if (joined) { backoff = 2000; pollNow(); }
           } else if ("broadcast".equals(ev)) {
             pollNow();
@@ -191,6 +194,7 @@ public class GLWatchService extends Service {
   private void lost(final WebSocket w) {
     h.post(() -> {
       if (w != sock) return;
+      ev(GLWatchService.this, "انقطعت القناة اللحظية");
       sock = null; joined = false; live = false;
       if (alive) { h.postDelayed(this::connect, backoff); backoff = Math.min(backoff * 2, 30000); }
     });
@@ -207,6 +211,13 @@ public class GLWatchService extends Service {
     if (key.startsWith("eyJ")) rb.header("Authorization", "Bearer " + key);
     try (Response r = http.newCall(rb.build()).execute()) {
       String t = r.body() != null ? r.body().string() : "";
+      String dh = r.header("Date");
+      if (dh != null) {
+        try {
+          SimpleDateFormat f = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US);
+          serverMs = f.parse(dh).getTime();
+        } catch (ParseException e) { /* لا شيء */ }
+      }
       if (!r.isSuccessful()) {
         if (t.contains("forbidden")) throw new SecurityException("forbidden");
         if (r.code() == 404 && t.contains("PGRST202")) throw new Missing();
@@ -240,7 +251,7 @@ public class GLWatchService extends Service {
             if (!r0.isNull("cursor")) cur = r0.optString("cursor", "");
           } catch (Missing m) { legacy = true; }
         }
-        if (cur.isEmpty()) cur = iso(System.currentTimeMillis());
+        if (cur.isEmpty()) cur = iso(serverMs > 0 ? serverMs : System.currentTimeMillis());
         p.edit().putString("cursor", cur).apply();
         status("ok");
         return;
@@ -269,7 +280,7 @@ public class GLWatchService extends Service {
           if (d != null && !me.equals(d.optString("by", ""))) out.put(d);
         }
       }
-      if (out.length() > 0) show(out);
+      if (out.length() > 0) { ev(this, "سحب " + out.length() + " حركة جديدة من الآخرين"); show(out); }
       if (!next.isEmpty()) p.edit().putString("cursor", next).apply();
       status("ok");
     } catch (SecurityException e) {
@@ -278,13 +289,14 @@ public class GLWatchService extends Service {
       h.post(this::stopSelf);
     } catch (Exception e) {
       status("err:" + String.valueOf(e.getMessage()));
+      ev(this, "خطأ في السحب: " + String.valueOf(e.getMessage()));
     }
   }
 
   private static class Missing extends Exception { Missing() { super("missing"); } }
 
   private void show(JSONArray items) {
-    if (appVisible) return; // والتطبيق مفتوح يعرض إشعاره الداخلي
+    if (appVisible) { ev(this, "وصلت " + items.length() + " حركة لكن التطبيق ظاهر فلم يُعرض إشعار هاتف"); return; } // والتطبيق مفتوح يعرض إشعاره الداخلي
     long now = System.currentTimeMillis();
     List<JSONObject> fresh = new ArrayList<>();
     for (int i = 0; i < items.length(); i++) {
@@ -293,7 +305,7 @@ public class GLWatchService extends Service {
       long at = d.optLong("at", now);
       if (now - at < 10 * 60 * 1000L) fresh.add(d); // نتجاهل القديم جدًا (بعد انقطاع طويل)
     }
-    if (fresh.isEmpty()) return;
+    if (fresh.isEmpty()) { ev(this, "وصلت " + items.length() + " حركة قديمة جدًا (أكثر من 10 دقائق) فتُجوهلت"); return; }
     if (fresh.size() > 3) {
       JSONObject last = fresh.get(fresh.size() - 1);
       post(100, "حسابات المولدة", fresh.size() + " حركات جديدة — آخرها: " + last.optString("text"), "/log", last.optLong("at", now));
@@ -309,13 +321,23 @@ public class GLWatchService extends Service {
   }
 
   private void post(int id, String title, String text, String route, long when) {
+    String r = notifyStatic(this, id, title, text, route, when);
+    ev(this, r == null ? "عُرض إشعار: " + clip(text) : "فشل العرض: " + r);
+  }
+
+  private static String clip(String t) { return t == null ? "" : (t.length() > 28 ? t.substring(0, 28) + "…" : t); }
+
+  // يبني الإشعار ويعرضه. يرجع null عند النجاح أو سبب الفشل
+  static String notifyStatic(Context c, int id, String title, String text, String route, long when) {
     try {
-      Intent i = new Intent(this, MainActivity.class);
+      ensureChannels(c);
+      if (!NotificationManagerCompat.from(c).areNotificationsEnabled()) return "الإشعارات معطّلة للتطبيق";
+      Intent i = new Intent(c, MainActivity.class);
       i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
       i.putExtra("route", route);
       int fl = PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
-      PendingIntent pi = PendingIntent.getActivity(this, id, i, fl);
-      Notification n = new NotificationCompat.Builder(this, CH_ALERT)
+      PendingIntent pi = PendingIntent.getActivity(c, id, i, fl);
+      Notification n = new NotificationCompat.Builder(c, CH_ALERT)
           .setSmallIcon(R.drawable.ic_stat_bolt)
           .setContentTitle(title)
           .setContentText(text)
@@ -328,8 +350,30 @@ public class GLWatchService extends Service {
           .setWhen(when)
           .setContentIntent(pi)
           .build();
-      NotificationManagerCompat.from(this).notify(id, n);
-    } catch (Exception e) { /* الإذن غير ممنوح */ }
+      NotificationManagerCompat.from(c).notify(id, n);
+      return null;
+    } catch (Exception e) { return String.valueOf(e.getMessage()); }
+  }
+
+  // أهمية قناة التنبيهات الحالية (0 = محجوبة، 4 = تظهر فوق الشاشة بصوت)، أو -1 قبل أندرويد 8
+  static int channelImportance(Context c) {
+    if (Build.VERSION.SDK_INT < 26) return -1;
+    try {
+      NotificationChannel ch = ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).getNotificationChannel(CH_ALERT);
+      return ch == null ? -2 : ch.getImportance();
+    } catch (Exception e) { return -3; }
+  }
+
+  // سجل أحداث مختصر يظهر في الإعدادات للتشخيص (آخر 12 سطرًا)
+  static synchronized void ev(Context c, String line) {
+    try {
+      SharedPreferences p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+      String t = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+      String[] old = p.getString("events", "").split("\n");
+      StringBuilder b = new StringBuilder(t + " " + line);
+      for (int k = 0; k < old.length && k < 11; k++) if (!old[k].isEmpty()) b.append('\n').append(old[k]);
+      p.edit().putString("events", b.toString()).apply();
+    } catch (Exception e) { /* لا شيء */ }
   }
 
   private Notification foregroundNotification() {
@@ -347,9 +391,11 @@ public class GLWatchService extends Service {
         .build();
   }
 
-  private void makeChannels() {
+  private void makeChannels() { ensureChannels(this); }
+
+  static void ensureChannels(Context c) {
     if (Build.VERSION.SDK_INT < 26) return;
-    NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+    NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
     NotificationChannel svc = new NotificationChannel(CH_SVC, "اتصال التنبيهات", NotificationManager.IMPORTANCE_MIN);
     svc.setDescription("إشعار صامت يبقي التطبيق جاهزًا لاستقبال التنبيهات");
     svc.setShowBadge(false);

@@ -37,6 +37,7 @@ export async function takeRoute() {
 export const power = {
   async ignoring() { try { return !!(await W().isIgnoring()).value; } catch (e) { return false; } },
   request: () => W().request(),
+  test: () => W().testNotify({ delay: 10 }),
   notifSettings: () => W().notificationSettings(),
   appSettings: () => W().appSettings(),
 };
@@ -67,12 +68,16 @@ export async function pushCardHtml() {
   const diag = !on ? '' : [
     chip(!!st.running, st.running ? 'الخدمة تعمل' : 'الخدمة غير شغّالة'),
     chip(!!st.live, st.live ? 'اتصال لحظي' : 'لا اتصال لحظي بعد'),
+    st.notifEnabled === false ? chip(false, 'الإشعارات معطّلة من إعدادات الهاتف') : '',
+    st.chan === 0 ? chip(false, 'قناة التنبيهات محجوبة') : (st.chan > 0 && st.chan < 4 ? chip(false, 'قناة التنبيهات بلا صوت/ظهور') : ''),
     st.last ? chip(!err, err ? `خطأ في الفحص: ${esc2(String(st.status).slice(4, 60))}` : `آخر فحص ${timeAgo(st.last)}`) : '',
   ].join('');
   return `<div class="card sync">
     <div class="sync-h">${icon('bell')}<div><b>التنبيهات خارج التطبيق</b><small>تصلك على الهاتف حتى والتطبيق مغلق</small></div></div>
     <div class="sync-st">${chip(on, on ? 'مفعّلة' : 'متوقفة')}${diag}${chip(granted, granted ? 'إذن الإشعارات ممنوح' : 'إذن الإشعارات غير ممنوح')}${chip(ign, ign ? 'يعمل دون تقييد البطارية' : 'البطارية قد تؤخّر التنبيهات')}</div>
     <div class="btn-row"><button class="btn soft" data-act="watch-toggle">${icon('bell')}${on ? 'إيقاف' : 'تفعيل'}</button><button class="btn soft" data-act="power-request">${icon('battery')}البطارية</button></div>
+    ${on && st.events ? `<div class="evlog">${st.events.split('\n').slice(0, 8).map((x) => esc2(x)).join('<br>')}</div>` : ''}
+    ${on ? `<div class="btn-row"><button class="btn soft" data-act="notif-test">${icon('bell')}إشعار تجريبي بعد 10 ثوانٍ</button></div>` : ''}
     ${on ? `<div class="btn-row"><button class="btn soft" data-act="watch-restart">${icon('clock')}إعادة تشغيل الخدمة وفحص الآن</button></div>` : ''}
     <div class="btn-row"><button class="btn soft" data-act="notif-settings">إعدادات إشعارات الهاتف</button><button class="btn soft" data-act="app-settings">إعدادات التطبيق</button></div>
   </div>`;

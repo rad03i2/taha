@@ -534,6 +534,7 @@ export const actions = {
       if (u.newer) updateSheet(u); else toast(`أنت على آخر إصدار (${currentBuild() || u.build})`);
     } catch (e) { toast('تعذّر الاتصال بـ GitHub'); }
   },
+  'notif-test': async () => { try { await power.test(); toast('اخرج من التطبيق الآن وانتظر 10 ثوانٍ'); setTimeout(() => nav.rerender(), 14000); } catch (e) { toast('هذه الميزة تحتاج التحديث الأخير'); } },
   'watch-restart': async () => { const r = await startWatch({ ask: true }); toast(r === 'ok' ? 'أُعيد تشغيل الخدمة' : 'لم يُمنح إذن الإشعارات'); setTimeout(() => nav.rerender(), 2500); },
   'watch-toggle': async () => {
     const on = S.settings().watch === false;
