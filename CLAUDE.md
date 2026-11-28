@@ -13,6 +13,7 @@
 - `www/js/sync.js` — الحسابات والمزامنة مع Supabase عبر RPC فقط، مع قناة Realtime (Broadcast) لإشارة لحظية بلا بيانات، واستطلاع احتياطي.
 - `www/js/perms.js` — صلاحيات المشرف (جداول الإجراء/النموذج/المسار/نوع السجل ← الصلاحية). `www/js/push.js` — تشغيل خدمة التنبيهات الأصلية واستثناء البطارية.
 - `native/droid/*` — كود أندرويد الأصلي (Java) ينسخه `scripts/patch-android.sh` إلى المشروع: `GLWatchService` (خدمة Foreground تسمع قناة Realtime وتعرض إشعارات الهاتف عبر RPC `notif_pull`)، `GLBootReceiver` (تشغيل بعد إعادة التشغيل)، `GLPowerPlugin` (جسر JS)، `MainActivity`.
+- `www/js/receipt.js` — رسم الوصولات صورةً (384 نقطة، خط Cairo) وتحويلها إلى ESC/POS. `www/js/print.js` — اختيار الطابعة والمعاينة والطباعة والمشاركة. الطباعة عبر `native/droid/GLPrintPlugin.java` (بلوتوث SPP) على طابعة MP583 58 ملم.
 - `www/js/fx.js` — أصوات (WebAudio) بأنماط متعددة واهتزاز. `www/js/hold.js` — الضغط المطوّل على شهر المشترك (دائرة تقدّم في المنتصف).
 - `www/js/config.js` — `SUPABASE_URL` و`SUPABASE_KEY` (anon). فارغان = وضع محلي بدون حسابات.
 - `supabase/schema.sql` — جداول ودوال الحسابات والمزامنة (آمن لإعادة التشغيل).

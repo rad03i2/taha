@@ -37,7 +37,7 @@ P
 M=$A/app/src/main/AndroidManifest.xml
 grep -q 'android.permission.VIBRATE' "$M" || sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />#' "$M"
 # permissions: vibration, notifications (Android 13+), battery exemption, background service, start after boot
-for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE RECEIVE_BOOT_COMPLETED REQUEST_INSTALL_PACKAGES; do
+for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE RECEIVE_BOOT_COMPLETED REQUEST_INSTALL_PACKAGES BLUETOOTH BLUETOOTH_ADMIN BLUETOOTH_CONNECT; do
   grep -q "android.permission.$PERM\"" "$M" || sed -i "s#<uses-permission android:name=\"android.permission.INTERNET\" />#<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.$PERM\" />#" "$M"
 done
 

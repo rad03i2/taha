@@ -9,6 +9,8 @@ import { sfx, haptic, GROUPS } from './fx.js';
 import { PERMS } from './perms.js';
 import { startWatch, stopWatch, askPowerOnce, power } from './push.js';
 import { checkUpdate, downloadAndInstall, install, currentBuild } from './update.js';
+import { printMenu, printReceipt, printStatement, printDebt, pickPrinter, printTest } from './print.js';
+const printExtra = (rid) => (rid ? { label: 'طباعة', ic: 'printer', fn: () => printReceipt(rid) } : undefined);
 
 const allCabinets = () => {
   const out = [];
@@ -156,14 +158,14 @@ forms.pay = (fd, form) => {
   if (!yms.length) return toast('اختر شهرًا واحدًا على الأقل');
   const id = form.dataset.id;
   const sub = S.ix().sub.get(id);
-  if (!S.dueOf(sub)) { const prev = S.payMonths(id, yms); closeSheet(); toast('تم تسجيل الدفعة', { undo: () => S.restoreRecords(prev) }); return; }
+  if (!S.dueOf(sub)) { const prev = S.payMonths(id, yms); closeSheet(); toast('تم تسجيل الدفعة', { undo: () => S.restoreRecords(prev), extra: printExtra(prev.__receipt) }); return; }
   const total = S.totalRemain(id, yms);
   const amount = parseNum(fd.get('amount'));
   if (!(amount > 0)) return toast('اكتب المبلغ المستلم');
   if (amount > total) return toast(`المبلغ أكبر من المطلوب (${fmtNum(total)})`);
   const r = S.payAmount(id, yms, amount);
   closeSheet();
-  toast(r.short ? `استلمت ${fmtNum(r.total)} — يتبقى ${fmtNum(r.short)}` : `تم استلام ${fmtNum(r.total)} — ${sub.name}`, { undo: () => S.restoreRecords(r.prev) });
+  toast(r.short ? `استلمت ${fmtNum(r.total)} — يتبقى ${fmtNum(r.short)}` : `تم استلام ${fmtNum(r.total)} — ${sub.name}`, { undo: () => S.restoreRecords(r.prev), extra: printExtra(r.receipt.id) });
 };
 function quickPay(subId) {
   const s = S.ix().sub.get(subId);
@@ -171,7 +173,7 @@ function quickPay(subId) {
   if (!d.months.length) return paySheet(subId);
   if (d.months.length === 1 && S.monthState(s, d.months[0]) === 'unpaid') {
     const prev = S.payMonths(subId, d.months);
-    toast(`تم تسديد ${ymLabel(d.months[0])} — ${s.name}`, { undo: () => S.restoreRecords(prev) });
+    toast(`تم تسديد ${ymLabel(d.months[0])} — ${s.name}`, { undo: () => S.restoreRecords(prev), extra: printExtra(prev.__receipt) });
   } else paySheet(subId);
 }
 
@@ -340,7 +342,7 @@ export function holdDone({ id, ym, cancel }) {
     if (prev) toast(`أُلغي تسديد ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev), quiet: true });
   } else {
     const prev = S.payMonths(id, [ym]);
-    toast(`تم تسديد ${ymLabel(ym)} — ${s.name}`, { undo: () => S.restoreRecords(prev), quiet: true });
+    toast(`تم تسديد ${ymLabel(ym)} — ${s.name}`, { undo: () => S.restoreRecords(prev), quiet: true, extra: printExtra(prev.__receipt) });
   }
 }
 
@@ -535,6 +537,12 @@ export const actions = {
     } catch (e) { toast('تعذّر الاتصال بـ GitHub'); }
   },
   'notif-test': async () => { try { await power.test(); toast('اخرج من التطبيق الآن وانتظر 10 ثوانٍ'); setTimeout(() => nav.rerender(), 14000); } catch (e) { toast('هذه الميزة تحتاج التحديث الأخير'); } },
+  'print-sub': (el) => printMenu(el.dataset.id),
+  'print-statement': (el) => printStatement(el.dataset.id),
+  'print-receipt': (el) => printReceipt(el.dataset.id),
+  'print-debt': (el) => printDebt(el.dataset.id),
+  'printer-pick': () => pickPrinter(() => nav.rerender()),
+  'printer-test': () => printTest(),
   'watch-restart': async () => { const r = await startWatch({ ask: true }); toast(r === 'ok' ? 'أُعيد تشغيل الخدمة' : 'لم يُمنح إذن الإشعارات'); setTimeout(() => nav.rerender(), 2500); },
   'watch-toggle': async () => {
     const on = S.settings().watch === false;

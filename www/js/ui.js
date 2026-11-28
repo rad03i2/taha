@@ -38,6 +38,7 @@ const P = {
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
   undo: '<path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h9.5a4.5 4.5 0 0 1 0 9H11"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3.5v3M16 3.5v3"/>',
+  printer: '<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="8" rx="2.4"/><path d="M7 14h10v6H7z"/>',
   bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
   tag: '<path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.4 1.4 0 0 1 0 2l-6.2 6.2a1.4 1.4 0 0 1-2 0z"/><circle cx="8.3" cy="8.3" r="1.3" fill="currentColor"/>',
   volume: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
@@ -64,13 +65,15 @@ let toastEl = null; let toastTimer = null;
 export const hideToast = () => { clearTimeout(toastTimer); if (toastEl) toastEl.classList.remove('show'); };
 export function toast(msg, opt = {}) {
   if (!toastEl) { toastEl = document.createElement('div'); toastEl.className = 'toast'; document.body.appendChild(toastEl); }
-  toastEl.innerHTML = `<span>${esc(msg)}</span>${opt.undo ? `<button class="toast-undo" type="button">${icon('undo')}تراجع</button>` : ''}`;
+  toastEl.innerHTML = `<span>${esc(msg)}</span>${opt.undo ? `<button class="toast-undo" type="button">${icon('undo')}تراجع</button>` : ''}${opt.extra ? `<button class="toast-undo toast-extra" type="button">${icon(opt.extra.ic)}${esc(opt.extra.label)}</button>` : ''}`;
   applyDigits(toastEl);
   const btn = toastEl.querySelector('.toast-undo');
   if (btn) btn.onclick = () => { clearTimeout(toastTimer); toastEl.classList.remove('show'); opt.undo(); };
+  const ex = toastEl.querySelector('.toast-extra');
+  if (ex) ex.onclick = () => { clearTimeout(toastTimer); toastEl.classList.remove('show'); opt.extra.fn(); };
   requestAnimationFrame(() => toastEl.classList.add('show'));
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opt.undo ? 5200 : 2400);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), opt.undo || opt.extra ? 6500 : 2400);
   if (opt.undo && !opt.quiet) { haptic('light'); sfx.ok(); }
 }
 

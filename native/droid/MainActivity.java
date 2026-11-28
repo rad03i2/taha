@@ -8,6 +8,7 @@ public class MainActivity extends BridgeActivity {
   @Override
   public void onCreate(Bundle savedInstanceState) {
     registerPlugin(GLPowerPlugin.class);
+    registerPlugin(GLPrintPlugin.class);
     super.onCreate(savedInstanceState);
     capture(getIntent());
   }

@@ -6,6 +6,7 @@ import { icon, money, moneyShort, ring, bar, empty, chip } from './ui.js';
 import { GROUPS } from './fx.js';
 import { PERMS } from './perms.js';
 import { currentBuild } from './update.js';
+import { printerName } from './print.js';
 
 const firstName = (n) => String(n || '').trim().split(/\s+/)[0] || '';
 // تاريخ ووقت مصغّران يتسعان داخل مربع الشهر: سطر للتاريخ (سنة/شهر/يوم) وسطر للساعة
@@ -250,7 +251,7 @@ export const dt = (ts) => {
 export const receiptRow = (r) => {
   const cancel = r.kind === 'cancel';
   const months = (r.items || []).map((i) => ymLabel(i.ym)).join('، ');
-  return `<div class="li"><span class="dot ${cancel ? 'bad' : 'ok'}"></span><div class="grow"><b>${cancel ? 'إلغاء تسديد' : 'استلام'} · ${esc(months)}</b><small>${esc(r.by || 'غير معروف')} · ${dt(r.at)}</small></div><b class="${cancel ? 'bad' : ''}">${money(r.amount)}</b></div>`;
+  return `<div class="li"><span class="dot ${cancel ? 'bad' : 'ok'}"></span><div class="grow"><b>${cancel ? 'إلغاء تسديد' : 'استلام'} · ${esc(months)}</b><small>${esc(r.by || 'غير معروف')} · ${dt(r.at)}</small></div><b class="${cancel ? 'bad' : ''}">${money(r.amount)}</b><button class="mini sq" data-act="print-receipt" data-id="${r.id}" aria-label="طباعة الوصل">${icon('printer')}</button></div>`;
 };
 
 /* ───────── المشترك ───────── */
@@ -288,7 +289,7 @@ export function subscriber({ id }) {
       <div><small>الاشتراك الشهري</small><b>${due ? money(due) : '—'}</b></div>
       <div class="${d.total ? 'bad' : 'ok'}"><small>إجمالي المتبقي</small><b>${money(d.total)}</b></div>
       ${d.total ? `<div class="sum-sub grow2">${d.months.length ? `${d.months.length} أشهر غير مسددة = ${money(d.monthsAmount)}` : ''}${d.months.length && d.manual ? ' · ' : ''}${d.manual ? `دين مسجّل ${money(d.manual)}` : ''}</div>` : ''}
-      <button class="btn primary block lg grow2" data-act="pay" data-id="${id}" ${s.active === false ? 'disabled' : ''}>${icon('check')}تسجيل دفعة</button>
+      <div class="btn-row grow2" style="margin-top:4px"><button class="btn primary lg" data-act="pay" data-id="${id}" ${s.active === false ? 'disabled' : ''}>${icon('check')}تسجيل دفعة</button><button class="btn soft lg" data-act="print-sub" data-id="${id}" data-silent="1">${icon('printer')}طباعة الوصل</button></div>
     </div>
     <div class="card">
       <div class="yr"><button data-act="year" data-d="-1" aria-label="السنة السابقة">${icon('back')}</button><b>${year}</b><button data-act="year" data-d="1" aria-label="السنة التالية">${icon('next')}</button></div>
@@ -299,7 +300,7 @@ export function subscriber({ id }) {
     ${partners.length ? `<div class="card"><h3 class="card-h">شركاء على نفس الجوزة</h3>${partners.map((p) => subRow(p)).join('')}</div>` : ''}
     <div class="card">
       <div class="card-hr"><h3 class="card-h">الديون المسجّلة</h3><b class="${d.manual ? 'bad' : 'ok'}">${money(d.manual)}</b></div>
-      ${debts.length ? debts.slice(0, 5).map((x) => `<div class="li"><span class="dot ${x.kind === 'debt' ? 'bad' : 'ok'}"></span><div class="grow"><b>${x.kind === 'debt' ? 'دين' : 'تسديد'} ${money(x.amount)}</b><small>${esc(x.note || '')} ${timeAgo(x.at)}</small></div></div>`).join('') : '<p class="muted sm">لا توجد ديون مسجّلة.</p>'}
+      ${debts.length ? debts.slice(0, 5).map((x) => `<div class="li"><span class="dot ${x.kind === 'debt' ? 'bad' : 'ok'}"></span><div class="grow"><b>${x.kind === 'debt' ? 'دين' : 'تسديد'} ${money(x.amount)}</b><small>${esc(x.note || '')} ${timeAgo(x.at)}${x.by ? ' · ' + esc(x.by) : ''}</small></div><button class="mini sq" data-act="print-debt" data-id="${x.id}" aria-label="طباعة وصل">${icon('printer')}</button></div>`).join('') : '<p class="muted sm">لا توجد ديون مسجّلة.</p>'}
       <div class="btn-row"><button class="btn soft grow" data-act="add-debt" data-id="${id}">${icon('plus')}تسجيل دين</button>${d.manual ? `<button class="btn soft grow" data-act="pay-debt" data-id="${id}">${icon('check')}تسديد دين</button>` : ''}</div>
     </div>
     <div class="card">
@@ -550,6 +551,8 @@ export function more() {
     ${secH('المزامنة السحابية')}
     <div id="sync-slot">${syncCard()}</div>
     <div id="push-slot"></div>
+    ${secH('الطباعة')}
+    <div class="card list">${setRow('printer', 'الطابعة', printerName() ? `المحددة: ${esc(printerName())}` : 'غير محددة · اضغط للاختيار', 'printer-pick')}${setRow('check', 'طباعة تجريبية', 'تأكد من وضوح الطباعة', 'printer-test')}</div>
     ${secH('التطبيق')}
     <div class="card list">${setRow('download', 'البحث عن تحديث', `الإصدار الحالي: ${currentBuild() || 'تجريبي'} · يُنزَّل من GitHub ويُثبَّت مباشرة`, 'update-check')}</div>
     <p class="foot">حسابات المولدة · الإصدار 1.2</p>
