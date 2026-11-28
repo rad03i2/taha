@@ -60,7 +60,7 @@ public class GLPrintPlugin extends Plugin {
   // الأجهزة المقرونة (يُقرن الجهاز أولًا من إعدادات بلوتوث الهاتف)
   @PluginMethod
   public void devices(PluginCall call) {
-    if (!granted()) { call.reject("permission"); return; }
+    if (!granted()) { call.reject("need_permission"); return; }
     BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
     if (a == null) { call.reject("no bluetooth"); return; }
     JSArray arr = new JSArray();
@@ -97,14 +97,14 @@ public class GLPrintPlugin extends Plugin {
     final String address = call.getString("address", "");
     final String data = call.getString("data", "");
     if (address.isEmpty() || data.isEmpty()) { call.reject("bad args"); return; }
-    if (!granted()) { call.reject("permission"); return; }
+    if (!granted()) { call.reject("need_permission"); return; }
     new Thread(new Runnable() {
       @Override public void run() {
         BluetoothSocket s = null;
         try {
           BluetoothAdapter a = BluetoothAdapter.getDefaultAdapter();
           if (a == null || !a.isEnabled()) { call.reject("bluetooth off"); return; }
-          a.cancelDiscovery();
+          // لا نستدعي cancelDiscovery(): تحتاج إذن BLUETOOTH_SCAN ولا بحث جارٍ أصلًا (نتصل بجهاز مقرون)
           BluetoothDevice d = a.getRemoteDevice(address);
           s = d.createRfcommSocketToServiceRecord(SPP);
           try {

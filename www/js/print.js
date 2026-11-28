@@ -48,9 +48,10 @@ export async function pickPrinter(done) {
 /* ───── الطباعة ───── */
 const friendly = (m) => {
   const t = String(m || '');
-  if (t.includes('permission')) return 'يلزم السماح بإذن «الأجهزة القريبة»';
+  if (t === 'need_permission') return 'يلزم السماح بإذن «الأجهزة القريبة»';
   if (t.includes('bluetooth off')) return 'البلوتوث مغلق. فعّله وأعد المحاولة';
-  return 'تعذّر الاتصال بالطابعة. تأكد أنها مفتوحة وقريبة ومقرونة';
+  // نعرض السبب الحقيقي لنعرف العطل بدقة
+  return `تعذّر الطباعة. تأكد أن الطابعة مفتوحة وقريبة ومقرونة. (${t.slice(0, 80)})`;
 };
 export async function doPrint(canvas) {
   if (!canPrintNative()) { toast('الطباعة تعمل من تطبيق أندرويد على الهاتف. يمكنك حفظ الوصل كصورة'); return false; }
