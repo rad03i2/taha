@@ -18,7 +18,7 @@ const blank = () => ({
   v: 1,
   deviceId: uid(),
   createdAt: Date.now(),
-  settings: { pricePerAmp: 0, theme: 'auto', user: '', onboarded: false, sound: true, haptic: true, volume: 0.8, sndTouch: 'soft', sndNotify: 'chime', sndDone: 'cheer' },
+  settings: { pricePerAmp: 0, theme: 'auto', user: '', onboarded: false, sound: true, haptic: true, watch: true, volume: 0.8, sndTouch: 'soft', sndNotify: 'chime', sndDone: 'cheer' },
   generators: [],
   phases: [],
   cabinets: [],

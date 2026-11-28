@@ -9,7 +9,7 @@ import * as SY from './sync.js';
 import { initHold, hold } from './hold.js';
 import { unlockAudio, wireTapSounds, sfx } from './fx.js';
 import { ACT, FORM, ROUTE } from './perms.js';
-import { enablePush, askPowerOnce, pushCardHtml, hasNative } from './push.js';
+import { startWatch, askPowerOnce, pushCardHtml, hasNative, takeRoute } from './push.js';
 
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabbar');
@@ -216,6 +216,8 @@ function wireNative() {
   const sp = document.getElementById('splash');
   if (sp) { sp.classList.add('out'); setTimeout(() => sp.remove(), 260); }
   setTimeout(() => SY.start(), 250); // بعد أول رسم: لا نؤخر ظهور الشاشة
-  if (SY.user()) setTimeout(() => enablePush({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)), 1200);
+  if (SY.user()) setTimeout(() => startWatch({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)), 1200);
+  takeRoute();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) takeRoute(); });
   window.__gl = { S, ui, nav, SY }; // للاختبار والتشخيص
 })();

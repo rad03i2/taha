@@ -36,94 +36,43 @@ P
 # vibration permission (haptic feedback)
 M=$A/app/src/main/AndroidManifest.xml
 grep -q 'android.permission.VIBRATE' "$M" || sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />#' "$M"
-# permissions: vibration, notifications (Android 13+), battery-optimization exemption request
-for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS; do
-  grep -q "android.permission.$PERM" "$M" || sed -i "s#<uses-permission android:name=\"android.permission.INTERNET\" />#<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.$PERM\" />#" "$M"
+# permissions: vibration, notifications (Android 13+), battery exemption, background service, start after boot
+for PERM in VIBRATE POST_NOTIFICATIONS REQUEST_IGNORE_BATTERY_OPTIMIZATIONS FOREGROUND_SERVICE FOREGROUND_SERVICE_SPECIAL_USE RECEIVE_BOOT_COMPLETED; do
+  grep -q "android.permission.$PERM\"" "$M" || sed -i "s#<uses-permission android:name=\"android.permission.INTERNET\" />#<uses-permission android:name=\"android.permission.INTERNET\" />\n    <uses-permission android:name=\"android.permission.$PERM\" />#" "$M"
 done
 
-# native plugin GLPower: ask Android to exempt the app from battery optimization + open notification settings
+# background alerts service + boot receiver (declared before </application>)
+python3 - "$M" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+if 'GLWatchService' not in s:
+    s = s.replace('</application>', """    <service android:name=".GLWatchService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="team_alerts_realtime" />
+        </service>
+        <receiver android:name=".GLBootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>""", 1)
+open(p, 'w').write(s)
+PY
+
+# OkHttp (websocket for the background service)
+python3 - "$A/app/build.gradle" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+if 'okhttp' not in s:
+    s = re.sub(r'(?m)^dependencies \{', "dependencies {\n    implementation 'com.squareup.okhttp3:okhttp:4.12.0'", s, count=1)
+open(p, 'w').write(s)
+PY
+
+# native sources (native/android/*)
 J=$A/app/src/main/java/com/taha/generator
-mkdir -p "$J"
-cat > "$J/GLPowerPlugin.java" <<'JAVA'
-package com.taha.generator;
-
-import android.content.Context;
-import android.content.Intent;
-import android.net.Uri;
-import android.os.Build;
-import android.os.PowerManager;
-import android.provider.Settings;
-import com.getcapacitor.JSObject;
-import com.getcapacitor.Plugin;
-import com.getcapacitor.PluginCall;
-import com.getcapacitor.PluginMethod;
-import com.getcapacitor.annotation.CapacitorPlugin;
-
-@CapacitorPlugin(name = "GLPower")
-public class GLPowerPlugin extends Plugin {
-  private boolean launch(Intent i) {
-    try { i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); getContext().startActivity(i); return true; } catch (Exception e) { return false; }
-  }
-  private Uri pkg() { return Uri.parse("package:" + getContext().getPackageName()); }
-
-  @PluginMethod
-  public void isIgnoring(PluginCall call) {
-    boolean v = true;
-    if (Build.VERSION.SDK_INT >= 23) {
-      PowerManager pm = (PowerManager) getContext().getSystemService(Context.POWER_SERVICE);
-      v = pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
-    }
-    JSObject r = new JSObject();
-    r.put("value", v);
-    call.resolve(r);
-  }
-
-  @PluginMethod
-  public void request(PluginCall call) {
-    Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-    i.setData(pkg());
-    if (!launch(i)) launch(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
-    call.resolve();
-  }
-
-  @PluginMethod
-  public void notificationSettings(PluginCall call) {
-    if (Build.VERSION.SDK_INT >= 26) {
-      Intent i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
-      i.putExtra(Settings.EXTRA_APP_PACKAGE, getContext().getPackageName());
-      if (launch(i)) { call.resolve(); return; }
-    }
-    appSettings(call);
-  }
-
-  @PluginMethod
-  public void appSettings(PluginCall call) {
-    Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-    i.setData(pkg());
-    launch(i);
-    call.resolve();
-  }
-}
-JAVA
-cat > "$J/MainActivity.java" <<'JAVA'
-package com.taha.generator;
-
-import android.os.Bundle;
-import com.getcapacitor.BridgeActivity;
-
-public class MainActivity extends BridgeActivity {
-  @Override
-  public void onCreate(Bundle savedInstanceState) {
-    registerPlugin(GLPowerPlugin.class);
-    super.onCreate(savedInstanceState);
-  }
-}
-JAVA
-
-# Firebase (push notifications): enabled automatically when branding/google-services.json exists
-if [ -f branding/google-services.json ]; then
-  cp branding/google-services.json $A/app/google-services.json
-  sed -i "s/export const PUSH = false;/export const PUSH = true;/" www/js/config.js
-  echo "push enabled (google-services.json found)"
-fi
+mkdir -p "$J" "$RES/drawable"
+cp native/android/*.java "$J/"
+cp native/android/ic_stat_bolt.xml "$RES/drawable/"
 echo "patched"

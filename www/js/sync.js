@@ -2,7 +2,7 @@
 import * as S from './store.js';
 import { toast, banner } from './ui.js';
 import { nav } from './nav.js';
-import { SUPABASE_URL, SUPABASE_KEY, PUSH } from './config.js';
+import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 
 export const available = () => !!(SUPABASE_URL && SUPABASE_KEY);
 export const cfg = () => S.syncState().cfg;
@@ -66,7 +66,7 @@ async function rpc(fn, body, timeout = 20000) {
 const authed = (fn, body) => rpc(fn, { p_token: cfg().token, ...body });
 
 function expired(e) {
-  if (e && (e.message || '').includes('forbidden') && cfg()) { rt.close(); S.setSyncCfg(null); set({ state: 'idle', err: '' }); return true; }
+  if (e && (e.message || '').includes('forbidden') && cfg()) { rt.close(); stopWatch(); S.setSyncCfg(null); set({ state: 'idle', err: '' }); return true; }
   return false;
 }
 
@@ -88,22 +88,10 @@ export async function setup({ name, display, username, password }) {
   adopt(r);
   rt.open(); syncNow();
 }
-// رمز جهاز الإشعارات (FCM): يُسجَّل لحساب المستخدم الحالي فقط
-export const registerPush = (fcm) => (cfg() ? authed('push_register', { p_fcm: fcm }).catch(() => {}) : null);
-// يرسل إشعارًا لهواتف بقية الفريق عبر دالة Edge (لا يحمل بيانات حساسة سوى نص الحركة)
-function notifyPhones(items) {
-  if (!PUSH || !cfg()) return;
-  const me = S.settings().user || ''; const now = Date.now();
-  const mine = items.filter((i) => i.kind === 'log' && i.data && i.data.by === me && now - (i.data.at || 0) < 120000);
-  if (!mine.length) return;
-  const f = mine[0].data;
-  fetch(`${SUPABASE_URL}/functions/v1/push`, {
-    method: 'POST', headers: HEADERS,
-    body: JSON.stringify({ p_token: cfg().token, title: me || 'حسابات المولدة', body: mine.length > 1 ? `${mine.length} حركات جديدة — آخرها: ${f.text}` : f.text, data: { subId: f.subId || '', k: f.k || '' } }),
-  }).catch(() => {});
-}
+// إيقاف خدمة التنبيهات الأصلية (أندرويد) عند الخروج أو انتهاء الجلسة
+const stopWatch = () => { try { const W = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GLPower; if (W) W.stopWatch(); } catch (e) { /* لا شيء */ } };
 export async function logout() {
-  try { const t = localStorage.getItem('gl.fcm'); if (cfg() && t) await authed('push_unregister', { p_fcm: t }); } catch (e) { /* نتجاهل */ }
+  stopWatch();
   try { if (cfg()) await authed('logout', {}); } catch (e) { /* نتجاهل */ }
   rt.close(); S.setSyncCfg(null); team = null; set({ state: 'idle', err: '', at: 0 });
 }
@@ -138,7 +126,6 @@ async function push() {
     await authed('sync_push', { p_items: items.map(({ kind, id, ts, data }) => ({ kind, id, ts, data })) });
     S.markPushed(items);
     rt.ping();
-    notifyPhones(items);
   }
 }
 // إشعار بما سجّله الآخرون: بنفس شكل إشعارات الهاتف، وبالنقر ينتقل لما تغيّر

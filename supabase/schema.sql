@@ -39,22 +39,6 @@ create table if not exists public.records (
   primary key (ws, kind, id)
 );
 create index if not exists records_ws_updated on public.records (ws, updated_at);
--- رموز إشعارات الهاتف (FCM). الدالة المرسِلة (Edge Function) تقرؤها بمفتاح الخدمة فقط.
-create table if not exists public.push_tokens (
-  token text primary key,
-  user_id uuid not null references public.users(id) on delete cascade,
-  ws text not null,
-  updated_at timestamptz not null default now()
-);
-create index if not exists push_tokens_ws on public.push_tokens (ws);
-alter table public.push_tokens enable row level security;
-revoke all on public.push_tokens from anon, authenticated;
-
-alter table public.workspaces enable row level security;
-alter table public.users enable row level security;
-alter table public.sessions enable row level security;
-alter table public.records enable row level security;
-revoke all on public.workspaces, public.users, public.sessions, public.records from anon, authenticated;
 
 -- ───── مساعدات داخلية (غير قابلة للاستدعاء من التطبيق) ─────
 create or replace function public._h(k text) returns text
@@ -187,19 +171,25 @@ begin
   return _user_json(t);
 end $$;
 
--- ───── إشعارات الهاتف: تسجيل رمز الجهاز ─────
-create or replace function public.push_register(p_token text, p_fcm text)
-returns void language plpgsql security definer set search_path = public, extensions as $$
-declare u users := _need(p_token);
+-- ───── إشعارات الهاتف: خدمة التطبيق في الخلفية تسحب حركات الآخرين فقط (خفيفة، لا تنزّل البيانات) ─────
+-- p_since = null: تُرجع المؤشر الحالي دون عناصر. غير ذلك: سجلات النشاط الجديدة التي كتبها غير المستخدم نفسه.
+create or replace function public.notif_pull(p_token text, p_since timestamptz default null)
+returns jsonb language plpgsql stable security definer set search_path = public, extensions as $$
+declare u users := _need(p_token); res jsonb;
 begin
-  if length(coalesce(p_fcm, '')) < 20 then raise exception 'bad token'; end if;
-  insert into push_tokens(token, user_id, ws) values (p_fcm, u.id, u.ws)
-  on conflict (token) do update set user_id = excluded.user_id, ws = excluded.ws, updated_at = now();
+  if p_since is null then
+    return jsonb_build_object('items', '[]'::jsonb, 'n', 0, 'cursor', (select coalesce(max(updated_at), now()) from records where ws = u.ws));
+  end if;
+  with page as (
+    select data, updated_at from records
+    where ws = u.ws and kind = 'log' and updated_at > p_since order by updated_at limit 100
+  )
+  select jsonb_build_object(
+    'items', coalesce(jsonb_agg(data order by updated_at) filter (where coalesce(data->>'by', '') <> u.display), '[]'::jsonb),
+    'n', count(*), 'cursor', coalesce(max(updated_at), p_since)
+  ) into res from page;
+  return res;
 end $$;
-create or replace function public.push_unregister(p_token text, p_fcm text)
-returns void language plpgsql security definer set search_path = public, extensions as $$
-declare u users := _need(p_token);
-begin delete from push_tokens where token = p_fcm and user_id = u.id; end $$;
 
 -- ───── المزامنة ─────
 create or replace function public._perm_of(k text) returns text
@@ -248,6 +238,6 @@ end $$;
 grant execute on function
   public.setup_workspace(text, text, text, text), public.login(text, text), public.me(text), public.logout(text),
   public.users_list(text), public.user_create(text, text, text, text, jsonb), public.user_update(text, uuid, text, text, boolean, jsonb),
-  public.push_register(text, text), public.push_unregister(text, text),
+  public.notif_pull(text, timestamptz),
   public.sync_pull(text, timestamptz), public.sync_push(text, jsonb)
 to anon, authenticated;

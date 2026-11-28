@@ -7,7 +7,7 @@ import { nav } from './nav.js';
 import { dt, ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
 import { sfx, haptic, GROUPS } from './fx.js';
 import { PERMS } from './perms.js';
-import { enablePush, askPowerOnce, power } from './push.js';
+import { startWatch, stopWatch, askPowerOnce, power } from './push.js';
 
 const allCabinets = () => {
   const out = [];
@@ -427,7 +427,7 @@ forms.ledger = (fd, form) => {
 };
 forms.login = async (fd, form) => {
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
-  try { await SY.login(String(fd.get('username')).trim(), String(fd.get('password'))); toast('أهلًا ' + (SY.user()?.display || '')); nav.go('/home'); enablePush({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)); } catch (e) { toast(e.message); } finally { btn.disabled = false; }
+  try { await SY.login(String(fd.get('username')).trim(), String(fd.get('password'))); toast('أهلًا ' + (SY.user()?.display || '')); nav.go('/home'); startWatch({ ask: true }).then(() => setTimeout(askPowerOnce, 1500)); } catch (e) { toast(e.message); } finally { btn.disabled = false; }
 };
 forms.setup = async (fd, form) => {
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
@@ -499,7 +499,11 @@ export const actions = {
     S.setSetting(G.key, el.dataset.id);
     sfx.preview(el.dataset.g, el.dataset.id);
   },
-  'push-enable': async () => { const r = await enablePush({ ask: true }); toast(r === 'ok' ? 'تم تفعيل الإشعارات' : r === 'denied' ? 'لم تُمنح الصلاحية. فعّلها من إعدادات إشعارات الهاتف' : 'تعذّر التفعيل'); },
+  'watch-toggle': async () => {
+    const on = S.settings().watch === false;
+    S.setSetting('watch', on);
+    if (on) { const r = await startWatch({ ask: true }); toast(r === 'ok' ? 'تم تفعيل التنبيهات' : 'لم يُمنح إذن الإشعارات. فعّله من إعدادات إشعارات الهاتف'); } else { stopWatch(); toast('أُوقفت التنبيهات خارج التطبيق'); }
+  },
   'power-request': () => power.request(),
   'notif-settings': () => power.notifSettings(),
   'app-settings': () => power.appSettings(),
