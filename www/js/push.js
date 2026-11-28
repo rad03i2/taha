@@ -76,6 +76,7 @@ export async function pushCardHtml() {
     <div class="sync-h">${icon('bell')}<div><b>التنبيهات خارج التطبيق</b><small>تصلك على الهاتف حتى والتطبيق مغلق</small></div></div>
     <div class="sync-st">${chip(on, on ? 'مفعّلة' : 'متوقفة')}${diag}${chip(granted, granted ? 'إذن الإشعارات ممنوح' : 'إذن الإشعارات غير ممنوح')}${chip(ign, ign ? 'يعمل دون تقييد البطارية' : 'البطارية قد تؤخّر التنبيهات')}</div>
     <div class="btn-row"><button class="btn soft" data-act="watch-toggle">${icon('bell')}${on ? 'إيقاف' : 'تفعيل'}</button><button class="btn soft" data-act="power-request">${icon('battery')}البطارية</button></div>
+    ${on && st.chanEv ? `<div class="evlog">القناة اللحظية: ${esc2(st.chanEv)}${st.flaps ? ` · عدد الانقطاعات منذ التثبيت: ${st.flaps}` : ''}</div>` : ''}
     ${on && st.events ? `<div class="evlog">${st.events.split('\n').slice(0, 8).map((x) => esc2(x)).join('<br>')}</div>` : ''}
     ${on ? `<div class="btn-row"><button class="btn soft" data-act="notif-test">${icon('bell')}إشعار تجريبي بعد 10 ثوانٍ</button></div>` : ''}
     ${on ? `<div class="btn-row"><button class="btn soft" data-act="watch-restart">${icon('clock')}إعادة تشغيل الخدمة وفحص الآن</button></div>` : ''}

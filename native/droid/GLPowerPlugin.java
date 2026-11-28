@@ -124,6 +124,8 @@ public class GLPowerPlugin extends Plugin {
     r.put("status", p.getString("status", ""));
     r.put("last", p.getLong("last", 0));
     r.put("events", p.getString("events", ""));
+    r.put("chanEv", p.getString("chanEv", ""));
+    r.put("flaps", p.getInt("flaps", 0));
     r.put("notifEnabled", androidx.core.app.NotificationManagerCompat.from(getContext()).areNotificationsEnabled());
     r.put("chan", GLWatchService.channelImportance(getContext()));
     call.resolve(r);

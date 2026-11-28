@@ -62,6 +62,7 @@ public class GLWatchService extends Service {
   private int seq = 0;
   private String url = "", key = "", token = "", ws = "";
   private ConnectivityManager.NetworkCallback netCb;
+  private volatile long lastRx = 0;     // آخر رسالة وصلت من القناة (لاكتشاف الانقطاع الصامت)
   private long serverMs = 0; // وقت الخادم من ترويسة Date (لتفادي فرق ساعة الهاتف)
 
   static void start(Context c) {
@@ -88,7 +89,7 @@ public class GLWatchService extends Service {
     super.onCreate();
     alive = true;
     running = true;
-    http = new OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).pingInterval(30, TimeUnit.SECONDS).build();
+    http = new OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS).readTimeout(0, TimeUnit.MILLISECONDS).build();
     if (Build.VERSION.SDK_INT >= 24) {
       try {
         ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -111,7 +112,7 @@ public class GLWatchService extends Service {
     h.removeCallbacks(loop);
     h.postDelayed(loop, 60000);
     h.removeCallbacks(beat);
-    h.postDelayed(beat, 25000);
+    h.postDelayed(beat, 10000);
     return START_STICKY;
   }
 
@@ -146,17 +147,32 @@ public class GLWatchService extends Service {
       if (!alive) return;
       if (!joined) { closeSock(); connect(); }
       pollNow();
-      h.postDelayed(this, 60000);
+      h.postDelayed(this, joined ? 60000 : 20000); // بلا قناة لحظية نسحب كل 20 ثانية
     }
   };
   private final Runnable beat = new Runnable() {
     @Override public void run() {
       if (!alive) return;
       WebSocket s = sock;
-      if (s != null) s.send("{\"topic\":\"phoenix\",\"event\":\"heartbeat\",\"payload\":{},\"ref\":\"" + (++seq) + "\"}");
-      h.postDelayed(this, 25000);
+      if (s != null) {
+        if (joined && System.currentTimeMillis() - lastRx > 35000) {
+          chan("لا ردّ من القناة منذ 35 ثانية: إعادة الاتصال");
+          closeSock(); connect();
+        } else {
+          s.send("{\"topic\":\"phoenix\",\"event\":\"heartbeat\",\"payload\":{},\"ref\":\"" + (++seq) + "\"}");
+        }
+      }
+      h.postDelayed(this, 10000);
     }
   };
+
+  // آخر حدث للقناة وعدد الانقطاعات (يظهر في الإعدادات دون إغراق سجل الأحداث)
+  private void chan(String text) {
+    SharedPreferences p = prefs();
+    int n = p.getInt("flaps", 0) + ((text.startsWith("انقطعت") || text.startsWith("لا ردّ")) ? 1 : 0);
+    String t = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+    p.edit().putString("chanEv", t + " " + text).putInt("flaps", n).apply();
+  }
 
   private void closeSock() {
     joined = false; live = false;
@@ -170,31 +186,33 @@ public class GLWatchService extends Service {
     String u = url.replaceFirst("^http", "ws") + "/realtime/v1/websocket?apikey=" + key + "&vsn=1.0.0";
     sock = http.newWebSocket(new Request.Builder().url(u).build(), new WebSocketListener() {
       @Override public void onOpen(WebSocket w, Response r) {
+        lastRx = System.currentTimeMillis();
         w.send("{\"topic\":\"" + topic + "\",\"event\":\"phx_join\",\"payload\":{\"config\":{\"broadcast\":{\"self\":false,\"ack\":false},\"presence\":{\"key\":\"\"},\"postgres_changes\":[]}},\"ref\":\"" + (++seq) + "\"}");
       }
       @Override public void onMessage(WebSocket w, String t) {
+        lastRx = System.currentTimeMillis();
         try {
           JSONObject m = new JSONObject(t);
           String ev = m.optString("event");
           if ("phx_reply".equals(ev) && topic.equals(m.optString("topic"))) {
             joined = "ok".equals(m.getJSONObject("payload").optString("status"));
             live = joined;
-            ev(GLWatchService.this, joined ? "القناة اللحظية متصلة" : "رفض الانضمام للقناة");
+            chan(joined ? "متصلة" : "رفض الانضمام للقناة");
             if (joined) { backoff = 2000; pollNow(); }
           } else if ("broadcast".equals(ev)) {
             pollNow();
           }
         } catch (Exception e) { /* لا شيء */ }
       }
-      @Override public void onClosed(WebSocket w, int code, String reason) { lost(w); }
-      @Override public void onFailure(WebSocket w, Throwable t, Response r) { lost(w); }
+      @Override public void onClosed(WebSocket w, int code, String reason) { lost(w, "إغلاق " + code + " " + reason); }
+      @Override public void onFailure(WebSocket w, Throwable t, Response r) { lost(w, "فشل: " + t.getClass().getSimpleName() + " " + t.getMessage()); }
     });
   }
 
-  private void lost(final WebSocket w) {
+  private void lost(final WebSocket w, final String why) {
     h.post(() -> {
       if (w != sock) return;
-      ev(GLWatchService.this, "انقطعت القناة اللحظية");
+      chan("انقطعت — " + why);
       sock = null; joined = false; live = false;
       if (alive) { h.postDelayed(this::connect, backoff); backoff = Math.min(backoff * 2, 30000); }
     });
