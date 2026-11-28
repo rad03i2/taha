@@ -5,6 +5,7 @@ import * as S from './store.js';
 import { icon, money, openSheet, closeSheet, closeAllSheets, confirmBox, toast, empty } from './ui.js';
 import { nav } from './nav.js';
 import { dt, ui, subRow, NOTE_TYPES, CONN_STATES, avatar } from './views.js';
+import { sfx, haptic } from './fx.js';
 
 const allCabinets = () => {
   const out = [];
@@ -84,7 +85,7 @@ forms.sub = (fd, form) => {
   const subId = form.dataset.sub; const connId = form.dataset.conn;
   if (subId) {
     S.upd('subscribers', subId, { name, amps, phone, startYM });
-    S.logAct(`تعديل مشترك: ${name}`);
+    S.logAct(`تعديل مشترك: ${name}`, subId, 'sub');
     toast('تم الحفظ');
   } else {
     const cabinetId = fd.get('cab') || form.dataset.cab;
@@ -219,7 +220,7 @@ forms.note = (fd, form) => {
   const subId = fd.get('subId') || undefined;
   const connId = !subId && form.dataset.conn ? form.dataset.conn : undefined;
   S.add('notes', { type: fd.get('type'), text, subId, connId, done: false });
-  S.logAct(`ملاحظة جديدة: ${NOTE_TYPES[fd.get('type')].t}`);
+  S.logAct(`أضاف ملاحظة (${NOTE_TYPES[fd.get('type')].t}): ${text.length > 70 ? text.slice(0, 70) + '…' : text}`, subId, 'note');
   closeSheet();
   toast('تمت إضافة الملاحظة');
 };
@@ -251,16 +252,15 @@ export function generatorSheet(g) {
   openSheet(`<form data-form="gen" data-id="${g?.id || ''}">
     <h3 class="sh-title">${g ? 'تعديل المولدة' : 'مولدة جديدة'}</h3>
     <label class="field"><span>اسم المولدة</span><input name="name" value="${esc(g?.name || '')}" placeholder="مثال: المولدة الجديدة" autocomplete="off" required autofocus></label>
-    <label class="field"><span>سعر الأمبير لهذه المولدة</span><input name="price" inputmode="decimal" value="${g?.price > 0 ? g.price : ''}" placeholder="${S.settings().pricePerAmp > 0 ? 'اتركه فارغًا لاستعمال ' + fmtNum(S.settings().pricePerAmp) : 'مثال: 7000'}" autocomplete="off"></label>
     <label class="field"><span>سعة المولدة (أمبير)</span><input name="capacity" inputmode="decimal" value="${g?.capacity > 0 ? g.capacity : ''}" placeholder="مثال: 100" autocomplete="off"></label>
-    <p class="hint">كل مولدة تحصل تلقائيًا على 3 فيزات، ويمكنك تغيير أسمائها لاحقًا.</p>
+    <p class="hint">كل مولدة تحصل تلقائيًا على 3 فيزات، ويمكنك تغيير أسمائها لاحقًا. سعر الأمبير يُحدَّد من شاشة «التسعيرات».</p>
     <button class="btn primary block lg" type="submit">${g ? 'حفظ' : 'إضافة المولدة'}</button></form>`);
 }
 forms.gen = (fd, form) => {
   const name = (fd.get('name') || '').trim(); if (!name) return toast('اكتب الاسم');
-  const price = parseNum(fd.get('price')); const capacity = parseNum(fd.get('capacity'));
-  if (form.dataset.id) { S.upd('generators', form.dataset.id, { name, price: price > 0 ? price : null, capacity: capacity > 0 ? capacity : null }); toast('تم الحفظ'); closeSheet(); }
-  else { const g = S.addGenerator({ name, price }); if (capacity > 0) S.upd('generators', g.id, { capacity }); closeSheet(); toast('تمت إضافة المولدة'); nav.go(`/gen/${g.id}`); }
+  const capacity = parseNum(fd.get('capacity'));
+  if (form.dataset.id) { S.upd('generators', form.dataset.id, { name, capacity: capacity > 0 ? capacity : null }); toast('تم الحفظ'); closeSheet(); }
+  else { const g = S.addGenerator({ name }); if (capacity > 0) S.upd('generators', g.id, { capacity }); closeSheet(); toast('تمت إضافة المولدة'); nav.go(`/gen/${g.id}`); }
 };
 function phasesSheet(genId) {
   const ps = S.phasesOf(genId);
@@ -298,6 +298,49 @@ forms.conn = (fd, form) => {
   S.upd('connections', form.dataset.id, { no, state: fd.get('state') });
   closeSheet(); toast('تم الحفظ');
 };
+/* ───────── التسعيرات ───────── */
+export function priceSheet(ym) {
+  const own = S.priceOwn(ym); const cur = S.priceFor(ym);
+  const gens = S.generators();
+  const r = S.priceRecFor(ym);
+  const w = openSheet(`<form data-form="price" data-ym="${ym}">
+    <h3 class="sh-title">تسعيرة ${esc(ymLabel(ym))}</h3>
+    <label class="field"><span>سعر الأمبير الواحد (${esc(S.settings().currency)})</span><input name="price" inputmode="decimal" value="${cur > 0 ? cur : ''}" placeholder="مثال: 9000" autocomplete="off" autofocus required></label>
+    ${gens.length > 1 ? `<details class="adv"><summary>${icon('gen')}سعر خاص لمولدة معينة (اختياري)</summary>
+      ${gens.map((g) => `<label class="field"><span>${esc(g.name)}</span><input name="g_${g.id}" inputmode="decimal" value="${own?.byGen?.[g.id] > 0 ? own.byGen[g.id] : ''}" placeholder="اتركه فارغًا لاستعمال السعر العام" autocomplete="off"></label>`).join('')}</details>` : ''}
+    <p class="hint">${own ? 'هذا الشهر له تسعيرة محددة.' : r ? `هذا الشهر يرث سعر ${esc(ymLabel(r.ym))} حاليًا.` : 'لا توجد تسعيرة سابقة.'} الأشهر التالية غير المحددة تأخذ هذا السعر تلقائيًا. التسديدات المسجّلة سابقًا لا تتغير.</p>
+    <button class="btn primary block lg" type="submit">${icon('check')}حفظ التسعيرة</button>
+    ${own ? `<button class="btn danger-ghost block" type="button" data-act="price-clear" data-ym="${ym}" data-close="1">إزالة التحديد (يرجع للموروث)</button>` : ''}
+  </form>`);
+  return w;
+}
+forms.price = (fd, form) => {
+  const price = parseNum(fd.get('price'));
+  if (!(price > 0)) return toast('اكتب سعر الأمبير');
+  const byGen = {};
+  S.generators().forEach((g) => { const v = parseNum(fd.get('g_' + g.id)); if (v > 0) byGen[g.id] = v; });
+  S.setPrice(form.dataset.ym, price, byGen);
+  closeSheet(); toast(`تم حفظ تسعيرة ${ymLabel(form.dataset.ym)}`);
+};
+
+// الضغط المطوّل على شهر: تسديد (أو إلغاء إن كان مسددًا)
+export function holdInfo(el) {
+  const { id, ym, k } = el.dataset;
+  if (k === 'before') return null;
+  const { m } = ymParse(ym);
+  return { id, ym, m, cancel: k === 'paid' };
+}
+export function holdDone({ id, ym, cancel }) {
+  const s = S.ix().sub.get(id); if (!s) return;
+  if (cancel) {
+    const prev = S.unpayMonth(id, ym);
+    if (prev) toast(`أُلغي تسديد ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev), quiet: true });
+  } else {
+    const prev = S.payMonths(id, [ym]);
+    toast(`تم تسديد ${ymLabel(ym)} — ${s.name}`, { undo: () => S.restoreRecords(prev), quiet: true });
+  }
+}
+
 forms.prompt = (fd, form) => { const ok = form._save(fd.get('v')); if (ok !== false) closeSheet(); };
 
 /* ───────── الإعدادات والبيانات ───────── */
@@ -329,7 +372,8 @@ function importFile() {
   inp.click();
 }
 forms.onboard = (fd) => {
-  S.setSetting('pricePerAmp', parseNum(fd.get('price')));
+  const pr = parseNum(fd.get('price'));
+  if (pr > 0) S.setPrice(ymNow(), pr);
   S.setSetting('currency', (fd.get('currency') || 'د.ع').trim() || 'د.ع');
   S.setSetting('user', (fd.get('user') || '').trim());
   S.setSetting('onboarded', true);
@@ -388,7 +432,7 @@ export const actions = {
   'ledger-del': async (el) => { if (await confirmBox({ title: 'حذف هذه الحركة؟', ok: 'حذف', danger: true })) S.upd('ledger', el.dataset.id, { deleted: true }); },
   'party-add': () => openSheet(`<form data-form="party"><h3 class="sh-title">قائمة جديدة</h3><label class="field"><span>اسم الجهة</span><input name="name" placeholder="مثال: أبو الغاز، الصناعة، محلات محمود" autocomplete="off" required autofocus></label><button class="btn primary block lg" type="submit">إنشاء</button></form>`),
   'party-del': async (el) => { if (await confirmBox({ title: 'حذف القائمة؟', text: 'تُحذف حركاتها أيضًا.', ok: 'حذف', danger: true })) { const id = el.dataset.id; S.live('ledger').filter((e) => e.partyId === id).forEach((e) => S.upd('ledger', e.id, { deleted: true })); S.upd('parties', id, { deleted: true }); nav.back(); } },
-  'sync-now': () => { SY.syncNow(); toast('جارٍ المزامنة…'); },
+  'sync-now': () => { SY.syncNow({ loud: true }); toast('جارٍ المزامنة…'); },
   logout: async () => { if (await confirmBox({ title: 'تسجيل الخروج؟', text: 'تبقى بياناتك على الجهاز، وتحتاج للدخول مجددًا.', ok: 'خروج' })) { await SY.logout(); nav.go('/home'); } },
   'setup-open': () => openSheet(`<form data-form="setup"><h3 class="sh-title">إنشاء المساحة والمدير</h3>
     <p class="hint">تُنفَّذ مرة واحدة فقط من جهاز المدير (حسن). بعدها ينشئ المشرفين من «المزيد ← إدارة المشرفين».</p>
@@ -426,10 +470,16 @@ export const actions = {
     const { id, ym } = el.dataset; const s = S.ix().sub.get(id);
     const k = S.monthState(s, ym);
     if (k === 'before') return toast('هذا الشهر قبل بداية حساب المشترك');
-    if (k === 'paid') { const prev = S.unpayMonth(id, ym); toast(`أُلغي تسديد ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev) }); }
-    else if (k === 'partial') paySheet(id, ym);
-    else { const prev = S.payMonths(id, [ym]); toast(`تم تأشير ${ymLabel(ym)}`, { undo: () => S.restoreRecords(prev) }); }
+    if (k === 'paid') return toast('اضغط مطولًا (ثانية) لإلغاء تسديد هذا الشهر', { quiet: true });
+    const ok = S.unpaidMonths(s).includes(ym) || [1, 2, 3].map((i) => ymAdd(ymNow(), i)).includes(ym);
+    if (!ok) return toast('اضغط مطولًا (ثانية) لتسديد هذا الشهر مقدّمًا', { quiet: true });
+    paySheet(id, ym);
   },
+  'price-edit': (el) => priceSheet(el.dataset.ym),
+  'price-clear': (el) => { S.clearPrice(el.dataset.ym); toast('أُزيل تحديد التسعيرة'); },
+  pyear: (el) => { ui.pyear += +el.dataset.d; nav.rerender(); },
+  'toggle-sound': () => { S.setSetting('sound', S.settings().sound === false); if (S.settings().sound !== false) sfx.ok(); },
+  'toggle-haptic': () => { S.setSetting('haptic', S.settings().haptic === false); if (S.settings().haptic !== false) haptic('success'); },
   'quick-pay': (el) => quickPay(el.dataset.id),
   pay: (el) => paySheet(el.dataset.id),
   'pay-pick': () => pickSubscriber((s) => paySheet(s.id), 'من الذي دفع؟'),
@@ -441,11 +491,11 @@ export const actions = {
   'add-note': (el) => noteSheet({ subId: el.dataset.id }),
   'add-debt': (el) => (el.dataset.id ? debtSheet({ subId: el.dataset.id, kind: 'debt' }) : pickSubscriber((s) => debtSheet({ subId: s.id, kind: 'debt' }), 'على من الدين؟')),
   'pay-debt': (el) => debtSheet({ subId: el.dataset.id, kind: 'payment' }),
-  'note-done': (el) => { const n = S.raw().notes.find((x) => x.id === el.dataset.id); S.upd('notes', n.id, { done: !n.done, doneAt: Date.now() }); toast(n.done ? 'أُنهيت الملاحظة' : 'أُعيد فتحها'); },
+  'note-done': (el) => { const n = S.raw().notes.find((x) => x.id === el.dataset.id); S.upd('notes', n.id, { done: !n.done, doneAt: Date.now(), doneBy: S.settings().user || '' }); S.logAct(`${n.done ? 'أُعيد فتح' : 'أُنهيت'} ملاحظة: ${n.text.length > 50 ? n.text.slice(0, 50) + '…' : n.text}`, n.subId, 'note'); toast(n.done ? 'أُنهيت الملاحظة' : 'أُعيد فتحها'); },
   'note-del': async (el) => { if (await confirmBox({ title: 'حذف الملاحظة؟', ok: 'حذف', danger: true })) S.upd('notes', el.dataset.id, { deleted: true }); },
   'gen-menu': (el) => {
     const id = el.dataset.id;
-    menuSheet('خيارات المولدة', [menuItem('edit', 'تعديل الاسم وسعر الأمبير', 'edit-gen', `data-id="${id}"`), menuItem('list', 'تعديل أسماء الفيزات', 'edit-phases', `data-id="${id}"`), menuItem('trash', 'حذف المولدة', 'del-gen', `data-id="${id}"`, true)]);
+    menuSheet('خيارات المولدة', [menuItem('edit', 'تعديل الاسم والسعة', 'edit-gen', `data-id="${id}"`), menuItem('list', 'تعديل أسماء الفيزات', 'edit-phases', `data-id="${id}"`), menuItem('trash', 'حذف المولدة', 'del-gen', `data-id="${id}"`, true)]);
   },
   'edit-gen': (el) => generatorSheet(S.ix().gen.get(el.dataset.id)),
   'edit-phases': (el) => phasesSheet(el.dataset.id),
@@ -465,10 +515,9 @@ export const actions = {
       menuItem('shield', s.active === false ? 'إعادة تفعيل المشترك' : 'إيقاف المشترك', 'toggle-active', `data-id="${id}"`),
       menuItem('trash', 'حذف المشترك', 'del-sub', `data-id="${id}"`, true)]);
   },
-  'toggle-active': (el) => { const s = S.ix().sub.get(el.dataset.id); S.upd('subscribers', s.id, { active: s.active === false }); S.logAct(`${s.active === false ? 'تفعيل' : 'إيقاف'} مشترك: ${s.name}`); },
+  'toggle-active': (el) => { const s = S.ix().sub.get(el.dataset.id); S.upd('subscribers', s.id, { active: s.active === false }); S.logAct(`${s.active === false ? 'تفعيل' : 'إيقاف'} مشترك: ${s.name}`, s.id, 'sub'); },
   'del-sub': async (el) => { const s = S.ix().sub.get(el.dataset.id); if (await confirmBox({ title: `حذف ${s.name}؟`, text: 'سيُحذف سجله وأشهره.', ok: 'حذف', danger: true })) { S.removeSubscriber(s.id); nav.back(); } },
   'set-user': () => promptSheet({ title: 'اسمك', label: 'الاسم', value: S.settings().user, onSave: (v) => S.setSetting('user', v.trim()) }),
-  'set-price': () => promptSheet({ title: 'سعر الأمبير الافتراضي', label: `السعر الشهري للأمبير (${S.settings().currency})`, mode: 'decimal', value: S.settings().pricePerAmp || '', hint: 'يمكن تحديد سعر مختلف لكل مولدة من خيارات المولدة.', onSave: (v) => { S.setSetting('pricePerAmp', parseNum(v)); toast('تم حفظ السعر'); } }),
   'set-currency': () => promptSheet({ title: 'العملة', label: 'رمز العملة', value: S.settings().currency, onSave: (v) => S.setSetting('currency', v.trim() || 'د.ع') }),
   'toggle-digits': () => S.setSetting('digits', S.settings().digits === 'indic' ? 'latin' : 'indic'),
   'cycle-theme': () => { const o = ['auto', 'light', 'dark']; S.setSetting('theme', o[(o.indexOf(S.settings().theme) + 1) % 3]); },

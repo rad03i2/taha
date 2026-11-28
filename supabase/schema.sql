@@ -185,6 +185,8 @@ declare u users := _need(p_token); it jsonb; n int := 0;
 begin
   if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) > 500 then raise exception 'bad batch'; end if;
   for it in select * from jsonb_array_elements(p_items) loop
+    -- التسعيرات وإعدادات المبلغ للمدير فقط (يُتجاهل ما يرسله المشرف دون خطأ)
+    if (it->>'kind') in ('prices', 'settings') and u.role <> 'manager' then continue; end if;
     insert into records(ws, kind, id, data, ts)
     values (u.ws, it->>'kind', it->>'id', it->'data', (it->>'ts')::bigint)
     on conflict (ws, kind, id) do update

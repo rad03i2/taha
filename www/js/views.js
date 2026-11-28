@@ -4,9 +4,11 @@ import { esc, fmtNum, ymNow, ymLabel, ymAdd, ymParse, MONTHS, timeAgo, normDigit
 import * as S from './store.js';
 import { icon, money, moneyShort, ring, bar, empty, chip } from './ui.js';
 
+const firstName = (n) => String(n || '').trim().split(/\s+/)[0] || '';
+
 export const ui = {
   ym: ymNow(), phase: {}, q: '', filter: 'all', gfilter: 'all', year: new Date().getFullYear(),
-  notesTab: 'open', limit: 60,
+  notesTab: 'open', limit: 60, pyear: new Date().getFullYear(),
 };
 export const resetViewState = () => { ui.q = ''; ui.filter = 'all'; ui.limit = 60; };
 
@@ -36,11 +38,24 @@ const appbar = ({ title, sub = '', back = true, actions = '', extra = '' }) => `
   ${extra}
 </header>`;
 const abBtn = (act, ic, label, extra = '') => `<button class="ab-btn" data-act="${act}" ${extra} aria-label="${esc(label)}">${icon(ic)}</button>`;
+const bellBtn = () => { const n = S.unread(); return `<button class="ab-btn bell" data-act="go" data-to="/log" aria-label="الإشعارات">${icon('bell')}${n ? `<i class="badge">${n > 99 ? '99+' : n}</i>` : ''}</button>`; };
 const tile = (ic, label, val) => `<div class="tile">${icon(ic)}<b>${val}</b><small>${label}</small></div>`;
 const secH = (t, right = '') => `<div class="sec-h"><h2>${t}</h2>${right}</div>`;
 const notFound = () => ({ tab: 'home', html: appbar({ title: 'غير موجود' }) + `<main class="body">${empty('info', 'هذا العنصر غير موجود', 'ربما حُذف.', '<a class="btn primary" href="#/home">الرئيسية</a>')}</main>` });
-const noPriceBanner = () => (S.generators().every((g) => !(g.price > 0)) && !(S.settings().pricePerAmp > 0)
-  ? `<button class="banner warn" data-act="set-price">${icon('alert')}<span>سعر الأمبير غير محدد، فلن تُحسب المبالغ. اضغط لتحديده.</span></button>` : '');
+const noPriceBanner = () => {
+  const now = ymNow();
+  if (S.generators().some((g) => S.priceFor(now, g.id) > 0)) {
+    // المدير: تذكير بتحديد تسعيرة الشهر الجديد (كل شهر يبدأ بتسعيرة)
+    if (SY.isManager() && !S.priceOwn(now) && S.ix().prices.length) {
+      const r = S.priceRecFor(now);
+      return `<button class="banner info" data-act="go" data-to="/prices">${icon('tag')}<span>تسعيرة ${esc(ymLabel(now))} لم تُحدَّد بعد، وتُحسب الآن بسعر ${esc(ymLabel(r.ym))} (${money(r.price)}). اضغط للتأكيد أو التغيير.</span></button>`;
+    }
+    return '';
+  }
+  return SY.isManager()
+    ? `<button class="banner warn" data-act="go" data-to="/prices">${icon('alert')}<span>سعر الأمبير غير محدد، فلن تُحسب المبالغ. اضغط لتحديد التسعيرة.</span></button>`
+    : `<div class="banner warn">${icon('alert')}<span>سعر الأمبير غير محدد بعد. راجع المدير ليحدده.</span></div>`;
+};
 
 /* ───────── الرئيسية ───────── */
 function onboarding() {
@@ -95,7 +110,7 @@ export function home() {
     <div class="tiles">${tile('users', 'مشترك', st.count)}${tile('bolt', 'أمبير', fmtNum(st.amps))}${tile('wallet', 'ديون', moneyShort(st.debt))}</div>
   </div>`;
   const log = S.raw().log.slice(0, 5);
-  const html = appbar({ title: 'حسابات المولدة', back: false, actions: abBtn('search', 'search', 'بحث'), extra: hero }) + `
+  const html = appbar({ title: 'حسابات المولدة', back: false, actions: abBtn('search', 'search', 'بحث') + bellBtn(), extra: hero }) + `
   <main class="body">
     ${noPriceBanner()}
     ${secH('المولدات', `<button class="link" data-act="add-gen">${icon('plus')}مولدة جديدة</button>`)}
@@ -242,12 +257,14 @@ export function subscriber({ id }) {
   const tiles = Array.from({ length: 12 }, (_, i) => {
     const ym = `${year}-${String(i + 1).padStart(2, '0')}`;
     const k = S.monthState(s, ym);
-    return `<button class="mt ${k} ${ym === now ? 'cur' : ''}" data-act="tile" data-id="${id}" data-ym="${ym}" ${s.active === false ? 'disabled' : ''}>
-      <b>${i + 1}</b><small>${MONTHS[i]}</small>${k === 'paid' ? icon('check', 'mt-ic') : k === 'partial' ? '<i class="mt-half"></i>' : ''}</button>`;
+    const r = k === 'paid' || k === 'partial' ? S.rec(id, ym) : null;
+    return `<button class="mt ${k} ${ym === now ? 'cur' : ''}" data-act="tile" data-id="${id}" data-ym="${ym}" data-k="${k}" data-silent="1" ${s.active === false ? 'disabled' : ''}>
+      <b>${i + 1}</b><small>${MONTHS[i]}</small>${r ? `<em class="by">${esc(firstName(r.by) || '—')}</em>` : ''}${k === 'paid' ? icon('check', 'mt-ic') : k === 'partial' ? '<i class="mt-half"></i>' : ''}</button>`;
   }).join('');
   const debts = (S.ix().debtsBySub.get(id) || []).slice().sort((a, b) => b.at - a.at);
   const notes = S.live('notes').filter((n) => n.subId === id || (n.connId && n.connId === s.connectionId)).sort((a, b) => b.createdAt - a.createdAt);
   const rcs = S.receiptsOf(id).slice(0, 12);
+  const acts = S.logOf(id).slice(0, 10);
   const partners = S.subsOfConn(s.connectionId).filter((x) => x.id !== id);
   const extra = `<div class="sub-hero">
     <div class="pill"><small>جوزة</small><b>${conn?.no ?? '—'}</b></div>
@@ -268,7 +285,7 @@ export function subscriber({ id }) {
       <div class="yr"><button data-act="year" data-d="-1" aria-label="السنة السابقة">${icon('back')}</button><b>${year}</b><button data-act="year" data-d="1" aria-label="السنة التالية">${icon('next')}</button></div>
       <div class="mgrid">${tiles}</div>
       <div class="legend"><span><i class="lg paid"></i>مسدد</span><span><i class="lg partial"></i>ناقص</span><span><i class="lg unpaid"></i>غير مسدد</span><span><i class="lg future"></i>قادم</span><span><i class="lg before"></i>قبل البداية</span></div>
-      <p class="hint">اضغط على شهر غير مسدد لتسديده، وعلى المسدد لإلغائه.</p>
+      <p class="hint hold-hint">${icon('clock')}<span><b>اضغط مطولًا</b> (ثانية) على الشهر لتسديده أو إلغاء تسديده. النقر السريع على شهر غير مسدد يفتح نافذة الدفع (للمبلغ الناقص).</span></p>
     </div>
     ${partners.length ? `<div class="card"><h3 class="card-h">شركاء على نفس الجوزة</h3>${partners.map((p) => subRow(p)).join('')}</div>` : ''}
     <div class="card">
@@ -281,6 +298,7 @@ export function subscriber({ id }) {
       ${notes.length ? notes.map(noteRow).join('') : '<p class="muted sm">لا توجد ملاحظات.</p>'}
     </div>
     ${rcs.length ? `<div class="card"><h3 class="card-h">سجل الاستلام</h3>${rcs.map(receiptRow).join('')}</div>` : ''}
+    ${acts.length ? `<div class="card"><h3 class="card-h">سجل حركات المشترك</h3>${acts.map((l) => `<div class="li"><span class="dot"></span><div class="grow"><b>${esc(l.text)}</b><small>${l.by ? `<span class="who-b">${esc(l.by)}</span> · ` : ''}${timeAgo(l.at)}</small></div></div>`).join('')}</div>` : ''}
   </main>`;
   return { tab: 'home', html };
 }
@@ -338,7 +356,7 @@ const noteRow = (n) => {
   else if (n.connId) { const c = S.ix().conn.get(n.connId); if (c) where = `جوزة ${c.no} · ${S.ix().cab.get(c.cabinetId)?.name || ''}`; }
   return `<div class="note ${n.done ? 'done' : ''}">
     <span class="n-ic ${t.c}">${icon(t.ic)}</span>
-    <div class="grow"><b>${esc(t.t)}</b><p>${esc(n.text)}</p><small>${where ? esc(where) + ' · ' : ''}${timeAgo(n.createdAt)}</small></div>
+    <div class="grow"><b>${esc(t.t)}</b><p>${esc(n.text)}</p><small>${where ? esc(where) + ' · ' : ''}${n.createdBy || n.by ? `<span class="who-b">${icon('user')}${esc(n.createdBy || n.by)}</span> · ` : ''}${timeAgo(n.createdAt)}${n.done && n.doneBy ? ` · أنهاها ${esc(n.doneBy)}` : ''}</small></div>
     <div class="n-act"><button class="mini sq" data-act="note-done" data-id="${n.id}" aria-label="${n.done ? 'إعادة فتح' : 'تم الحل'}">${icon(n.done ? 'undo' : 'check')}</button><button class="mini sq" data-act="note-del" data-id="${n.id}" aria-label="حذف">${icon('trash')}</button></div>
   </div>`;
 };
@@ -391,13 +409,13 @@ export function debts() {
     <div class="tiles two"><div class="tile"><small>أشهر غير مسددة</small><b>${moneyShort(mon)}</b></div><div class="tile"><small>ديون مسجّلة</small><b>${moneyShort(man)}</b></div></div></div>`;
   const html = appbar({ title: 'الديون', back: false, sub: `${rows.length} مشترك عليهم متبقي`, actions: abBtn('add-debt', 'plus', 'تسجيل دين'), extra }) + `
   <div class="toolbar">${genChips() || ''}</div>
-  <main class="body">${rows.length ? `<div class="card list">${rows.map(({ s, d }) => `<div class="srow" data-act="open-sub" data-id="${s.id}">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${esc(S.pathText(s))}${d.months.length ? ` · ${d.months.length} أشهر` : ''}${d.manual ? ' · دين مسجّل' : ''}</small></div><b class="bad">${money(d.total)}</b></div>`).join('')}</div>` : empty('shield', 'لا توجد ديون', 'كل المشتركين مسددون. أحسنت!')}</main>`;
+  <main class="body">${rows.length ? `<div class="card list">${rows.slice(0, ui.limit).map(({ s, d }) => `<div class="srow" data-act="open-sub" data-id="${s.id}">${avatar(s.name)}<div class="grow"><b>${esc(s.name)}</b><small>${esc(S.pathText(s))}${d.months.length ? ` · ${d.months.length} أشهر` : ''}${d.manual ? ' · دين مسجّل' : ''}</small></div><b class="bad">${money(d.total)}</b></div>`).join('')}</div>${rows.length > ui.limit ? `<button class="btn ghost block" data-act="more-subs">عرض المزيد (${rows.length - ui.limit})</button>` : ''}` : empty('shield', 'لا توجد ديون', 'كل المشتركين مسددون. أحسنت!')}</main>`;
   return { tab: 'debts', html };
 }
 
 /* ───────── المزيد والإعدادات ───────── */
 const setRow = (ic, t, sub, act, extra = '') => `<button class="set" data-act="${act}" ${extra}>${icon(ic, 'set-ic')}<div class="grow"><b>${t}</b>${sub ? `<small>${sub}</small>` : ''}</div>${icon('next', 'chev')}</button>`;
-function syncCard() {
+export function syncCard() {
   const dev = `<small class="mono">جهاز: ${esc(S.raw().deviceId.slice(0, 8))}</small>`;
   if (!SY.available()) return `<div class="card sync"><div class="sync-h">${icon('cloud')}<div><b>المزامنة غير مفعّلة</b><small>التطبيق يعمل على هذا الجهاز فقط</small></div></div>${dev}</div>`;
   const u = SY.user(); const s = SY.status();
@@ -411,16 +429,18 @@ function syncCard() {
 
 export function loginView() {
   const html = `
-<div class="welcome">
-  <div class="w-logo">${icon('bolt')}</div>
-  <h1>حسابات المولدة</h1>
-  <p>سجّل الدخول بالحساب الذي أنشأه لك المدير.</p>
-  <form class="card w-form" data-form="login">
+<div class="login">
+  <div class="lg-top">
+    <div class="w-logo">${icon('bolt')}</div>
+    <h1>حسابات المولدة</h1>
+    <p>سجّل الدخول بالحساب الذي أنشأه لك المدير</p>
+  </div>
+  <form class="card lg-card" data-form="login">
     <label class="field"><span>اسم المستخدم</span><input name="username" dir="ltr" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus></label>
     <label class="field"><span>كلمة المرور</span><input name="password" type="password" dir="ltr" autocomplete="current-password" required></label>
     <button class="btn primary block lg" type="submit">دخول</button>
   </form>
-  <button class="btn ghost block" data-act="setup-open">أنا المدير وأريد إنشاء المساحة (أول مرة)</button>
+  <button class="mgr-link" data-act="setup-open" data-silent="1">${icon('shield')}إعداد المساحة (للمدير فقط)</button>
 </div>`;
   return { tab: 'home', html, bare: true };
 }
@@ -438,6 +458,35 @@ export function team() {
   return { tab: 'more', html, live: 'team' };
 }
 
+/* ───────── التسعيرات (للمدير) ───────── */
+export function prices() {
+  if (!SY.isManager()) return notFound();
+  const now = ymNow(); const year = ui.pyear;
+  const cur = S.priceFor(now); const own = S.priceOwn(now);
+  const st = S.stats(S.allSubs(), now);
+  const hero = `<div class="hero slim"><div class="hero-main"><div class="hm-t"><small>سعر الأمبير في ${esc(ymLabel(now))}</small><strong>${cur > 0 ? money(cur) : 'غير محدد'}</strong><small>${own ? 'محدد لهذا الشهر' : cur > 0 ? 'موروث من الأشهر السابقة' : 'حدده الآن لتُحسب المبالغ'}</small></div></div>
+    <div class="tiles two"><div class="tile"><small>أمبيرات الشهر</small><b>${fmtNum(st.amps)}</b></div><div class="tile"><small>المتوقع تحصيله</small><b>${moneyShort(st.expected)}</b></div></div></div>`;
+  const rows = Array.from({ length: 12 }, (_, i) => {
+    const ym = `${year}-${String(i + 1).padStart(2, '0')}`;
+    const o = S.priceOwn(ym); const p = S.priceFor(ym); const r = S.priceRecFor(ym);
+    const src = o ? `محدد${o.by ? ' بواسطة ' + esc(o.by) : ''}` : p > 0 ? (r ? `موروث من ${esc(MONTHS[ymParse(r.ym).m - 1])} ${ymParse(r.ym).y}` : 'السعر القديم') : 'غير محدد';
+    const future = ym > now;
+    return `<button class="set prow ${o ? 'own' : ''} ${ym === now ? 'now' : ''} ${future ? 'fut' : ''}" data-act="price-edit" data-ym="${ym}">
+      <span class="pm">${i + 1}</span>
+      <div class="grow"><b>${MONTHS[i]}</b><small>${src}</small></div>
+      <strong class="${p > 0 ? '' : 'bad'}">${p > 0 ? fmtNum(p) : '—'}</strong>${icon('edit', 'chev')}</button>`;
+  }).join('');
+  const html = appbar({ title: 'التسعيرات', sub: 'سعر الأمبير لكل شهر · للمدير فقط', extra: hero }) + `
+  <main class="body">
+    <div class="card"><p class="muted sm">لكل شهر تسعيرته. الشهر الذي لم تُحدَّد له تسعيرة يأخذ تسعيرة أقرب شهر سابق محدد. يمكنك تعديل تسعيرة أي شهر سابق. التسديدات المسجّلة سابقًا لا تتغير.</p></div>
+    <div class="card">
+      <div class="yr"><button data-act="pyear" data-d="-1" aria-label="السنة السابقة">${icon('back')}</button><b>${year}</b><button data-act="pyear" data-d="1" aria-label="السنة التالية">${icon('next')}</button></div>
+      <div class="list prices">${rows}</div>
+    </div>
+  </main>`;
+  return { tab: 'more', html };
+}
+
 export function more() {
   const st = S.settings();
   const gens = S.generators();
@@ -446,8 +495,8 @@ export function more() {
     ${secH('الحساب والتسعير')}
     <div class="card list">
       ${SY.user() ? '' : setRow('user', 'اسمك', esc(st.user || 'غير محدد'), 'set-user')}
-      ${setRow('wallet', 'سعر الأمبير الافتراضي', st.pricePerAmp > 0 ? money(st.pricePerAmp) : 'غير محدد', 'set-price')}
-      ${setRow('hash', 'العملة', esc(st.currency), 'set-currency')}
+      ${SY.isManager() ? setRow('tag', 'التسعيرات', `سعر الأمبير لكل شهر · الحالي ${S.priceFor(ymNow()) > 0 ? money(S.priceFor(ymNow())) : 'غير محدد'}`, 'go', 'data-to="/prices"') : ''}
+      ${SY.isManager() ? setRow('hash', 'العملة', esc(st.currency), 'set-currency') : ''}
     </div>
     ${SY.isManager() && SY.user() ? `${secH('الفريق')}<div class="card list">${setRow('users', 'إدارة المشرفين', 'إنشاء حسابات المشرفين والتحكم بها', 'go', 'data-to="/team"')}</div>` : ''}
     ${secH('حساباتي')}
@@ -460,6 +509,8 @@ export function more() {
     ${secH('العرض')}
     <div class="card list">
       ${setRow('hash', 'شكل الأرقام', st.digits === 'indic' ? 'هندية ٠١٢٣' : 'لاتينية 0123', 'toggle-digits')}
+      ${setRow('volume', 'الأصوات', st.sound !== false ? 'مفعّلة' : 'متوقفة', 'toggle-sound')}
+      ${setRow('vibrate', 'الاهتزاز', st.haptic !== false ? 'مفعّل' : 'متوقف', 'toggle-haptic')}
       ${setRow('moon', 'المظهر', { auto: 'تلقائي', light: 'فاتح', dark: 'داكن' }[st.theme], 'cycle-theme')}
     </div>
     ${secH('البيانات')}
@@ -472,8 +523,8 @@ export function more() {
       ${gens.length ? '' : setRow('bolt', 'بيانات تجريبية', 'للتجربة فقط', 'seed-demo')}
     </div>
     ${secH('المزامنة السحابية')}
-    ${syncCard()}
-    <p class="foot">حسابات المولدة · الإصدار 1.0</p>
+    <div id="sync-slot">${syncCard()}</div>
+    <p class="foot">حسابات المولدة · الإصدار 1.1</p>
   </main>`;
   return { tab: 'more', html };
 }
@@ -503,6 +554,6 @@ export function importView() {
 }
 
 export const routes = {
-  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView, books, party, team,
+  home, gen: generator, cab: cabinet, sub: subscriber, notes, subs, debts, more, log, import: importView, books, party, team, prices,
 };
 export { ymAdd, ymParse };

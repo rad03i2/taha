@@ -33,4 +33,7 @@ if 'signingConfigs' not in s:
     buildTypes {''',1)
 open(p,'w').write(s)
 P
+# vibration permission (haptic feedback)
+M=$A/app/src/main/AndroidManifest.xml
+grep -q 'android.permission.VIBRATE' "$M" || sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.VIBRATE" />#' "$M"
 echo "patched"

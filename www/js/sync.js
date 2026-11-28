@@ -1,6 +1,7 @@
 // الحسابات والمزامنة السحابية (Supabase عبر دوال RPC). الأحدث يفوز لكل سجل (updatedAt).
 import * as S from './store.js';
-import { toast } from './ui.js';
+import { toast, banner } from './ui.js';
+import { nav } from './nav.js';
 import { SUPABASE_URL, SUPABASE_KEY } from './config.js';
 
 export const available = () => !!(SUPABASE_URL && SUPABASE_KEY);
@@ -15,7 +16,12 @@ const subs = new Set();
 export const status = () => ({ ...st, connected: !!cfg() });
 export const onStatus = (f) => { subs.add(f); return () => subs.delete(f); };
 const notify = () => subs.forEach((f) => f());
-const set = (p) => { Object.assign(st, p); notify(); };
+// لا نُبلغ المستمعين إلا عند تغيّر فعلي (لتفادي إعادة رسم الشاشة مع كل استطلاع)
+const set = (p) => {
+  const was = JSON.stringify([st.state, st.err, st.busy]);
+  Object.assign(st, p);
+  if (was !== JSON.stringify([st.state, st.err, st.busy])) notify();
+};
 
 const MSG = {
   'bad credentials': 'اسم المستخدم أو كلمة المرور غير صحيحة',
@@ -57,7 +63,7 @@ async function rpc(fn, body, timeout = 20000) {
 const authed = (fn, body) => rpc(fn, { p_token: cfg().token, ...body });
 
 function expired(e) {
-  if (e && (e.message || '').includes('forbidden') && cfg()) { S.setSyncCfg(null); set({ state: 'idle', err: '' }); return true; }
+  if (e && (e.message || '').includes('forbidden') && cfg()) { rt.close(); S.setSyncCfg(null); set({ state: 'idle', err: '' }); return true; }
   return false;
 }
 
@@ -71,17 +77,17 @@ export async function login(username, password) {
   let r;
   try { r = await rpc('login', { p_username: username, p_password: password }); } catch (e) { throw new Error(friendly(e)); }
   try { adopt(r); } catch (e) { throw new Error(friendly(e)); }
-  syncNow();
+  rt.open(); syncNow();
 }
 export async function setup({ name, display, username, password }) {
   let r;
   try { r = await rpc('setup_workspace', { p_name: name, p_username: username, p_password: password, p_display: display }); } catch (e) { throw new Error(friendly(e)); }
   adopt(r);
-  syncNow();
+  rt.open(); syncNow();
 }
 export async function logout() {
   try { if (cfg()) await authed('logout', {}); } catch (e) { /* نتجاهل */ }
-  S.setSyncCfg(null); team = null; set({ state: 'idle', err: '', at: 0 });
+  rt.close(); S.setSyncCfg(null); team = null; set({ state: 'idle', err: '', at: 0 });
 }
 export async function refreshMe() {
   if (!cfg()) return;
@@ -113,7 +119,25 @@ async function push() {
     if (!items.length) return;
     await authed('sync_push', { p_items: items.map(({ kind, id, ts, data }) => ({ kind, id, ts, data })) });
     S.markPushed(items);
+    rt.ping();
   }
+}
+// إشعار بما سجّله الآخرون: بنفس شكل إشعارات الهاتف، وبالنقر ينتقل لما تغيّر
+function announce(list) {
+  const first = list[0]; const names = [...new Set(list.map((x) => x.by))];
+  const many = list.length > 1;
+  const go = () => {
+    if (!many && first.subId && S.ix().sub.get(first.subId)) return nav.go(`/sub/${first.subId}`);
+    if (!many && first.k === 'note') return nav.go('/notes');
+    nav.go('/log');
+  };
+  banner({
+    title: names.slice(0, 2).join(' و') + (names.length > 2 ? '…' : ''),
+    body: many ? `${list.length} حركات جديدة — آخرها: ${first.text}` : first.text,
+    ic: first.k === 'pay' ? 'wallet' : first.k === 'note' ? 'note' : 'bolt',
+    onTap: go,
+  });
+  S.addUnread(list.length);
 }
 async function pull() {
   const first = !S.syncState().lastPull;
@@ -123,40 +147,84 @@ async function pull() {
     if (!r || !r.n) return;
     const res = S.applyRemote(r.items, { notify: !first });
     S.setLastPull(r.cursor);
-    if (res.fresh.length) { toast(`${res.fresh[0].by}: ${res.fresh[0].text}${res.fresh.length > 1 ? ` (+${res.fresh.length - 1})` : ''}`); S.addUnread(res.fresh.length); }
+    if (res.fresh.length) announce(res.fresh);
     if (r.n < 2000) return;
   }
 }
 
-let again = false;
-export async function syncNow() {
+/* ───── قناة لحظية (Supabase Realtime Broadcast) ─────
+   لا تحمل بيانات: مجرد «إشارة» تُرسل بعد كل دفع ليسحب الآخرون التغيير فورًا. البيانات نفسها تمر عبر الدوال المحمية فقط.
+   اسم القناة يتضمن معرّف المساحة العشوائي فلا يعرفه إلا أعضاؤها. إن تعذّرت القناة يعمل الاستطلاع الدوري وحده. */
+const rt = (() => {
+  let ws = null; let joined = false; let ref = 0; let hb = null; let retry = null; let wait = 1500;
+  const topic = () => `realtime:gl-${cfg()?.user?.ws || ''}`;
+  const send = (t, event, payload) => { try { ws.send(JSON.stringify({ topic: t, event, payload, ref: String(++ref) })); } catch (e) { /* لا شيء */ } };
+  const close = () => { clearInterval(hb); clearTimeout(retry); joined = false; if (ws) { const w = ws; ws = null; w.onclose = null; w.onerror = null; try { w.close(); } catch (e) { /* لا شيء */ } } };
+  const open = () => {
+    if (ws || !available() || !cfg() || !cfg().user?.ws || document.hidden || typeof WebSocket === 'undefined') return;
+    try { ws = new WebSocket(`${SUPABASE_URL.replace(/^http/, 'ws')}/realtime/v1/websocket?apikey=${encodeURIComponent(SUPABASE_KEY)}&vsn=1.0.0`); } catch (e) { ws = null; return; }
+    const me = ws;
+    me.onopen = () => {
+      send(topic(), 'phx_join', { config: { broadcast: { self: false, ack: false }, presence: { key: '' }, postgres_changes: [] } });
+      hb = setInterval(() => send('phoenix', 'heartbeat', {}), 25000);
+    };
+    me.onmessage = (m) => {
+      let d; try { d = JSON.parse(m.data); } catch (e) { return; }
+      if (d.event === 'phx_reply' && d.topic === topic()) { joined = d.payload?.status === 'ok'; if (joined) { wait = 1500; syncNow(); } }
+      else if (d.event === 'broadcast') syncNow();
+    };
+    const lost = () => { if (ws !== me) return; close(); retry = setTimeout(open, wait); wait = Math.min(wait * 2, 30000); };
+    me.onclose = lost; me.onerror = lost;
+  };
+  return {
+    open, close,
+    get joined() { return joined; },
+    ping() { if (joined && ws) send(topic(), 'broadcast', { type: 'broadcast', event: 'ping', payload: {} }); },
+  };
+})();
+
+let again = false; let skip = 0;
+export async function syncNow(opt = {}) {
   if (!available() || !cfg()) return;
   if (st.busy) { again = true; return; }
-  set({ busy: true, state: 'sync', err: '' });
+  st.busy = true;
+  if (opt.loud || st.state !== 'ok') set({ state: 'sync', err: '' });
   try {
     await push();
     await pull();
     await push();
-    set({ busy: false, state: 'ok', at: Date.now(), err: '' });
+    skip = 0;
+    st.busy = false; st.at = Date.now();
+    set({ state: 'ok', err: '' });
+    if (opt.loud) notify();
   } catch (e) {
-    set({ busy: false });
-    if (!expired(e)) set({ state: 'err', err: friendly(e) });
+    st.busy = false;
+    if (!expired(e)) { skip = 4; set({ state: 'err', err: friendly(e) }); }
   }
-  if (again) { again = false; setTimeout(syncNow, 300); }
+  if (again) { again = false; setTimeout(syncNow, 150); }
 }
 
 /* ───── التشغيل التلقائي ───── */
 let pushTimer = null; let ticks = 0;
+const POLL_MS = 3000; // استطلاع سريع أثناء فتح التطبيق: أي تغيير عند الآخرين يصلك خلال ثوانٍ
 const schedulePush = () => {
   if (!cfg() || !available()) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(syncNow, 1200);
+  pushTimer = setTimeout(syncNow, 200);
 };
 export function start() {
   if (!available()) return;
   S.onChange(() => { if (cfg() && S.dirtyItems(1).length) schedulePush(); });
-  setInterval(() => { if (!document.hidden && cfg()) { syncNow(); if (++ticks % 6 === 0) refreshMe(); } }, 10000);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncNow(); refreshMe(); } });
-  window.addEventListener('online', syncNow);
-  refreshMe(); syncNow();
+  setInterval(() => {
+    if (document.hidden || !cfg()) return;
+    if (skip > 0) { skip--; return; }
+    ticks++;
+    if (!rt.joined || ticks % 4 === 0) syncNow(); // مع القناة اللحظية يكفي استطلاع احتياطي كل 12 ثانية
+    if (ticks % 20 === 0) refreshMe();
+    if (!rt.joined) rt.open();
+  }, POLL_MS);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) rt.close(); else { skip = 0; rt.open(); syncNow(); refreshMe(); } });
+  window.addEventListener('online', () => { skip = 0; rt.open(); syncNow(); });
+  window.addEventListener('offline', () => rt.close());
+  rt.open(); refreshMe(); syncNow();
 }

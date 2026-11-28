@@ -1,6 +1,8 @@
 // المخزن: كل البيانات في الذاكرة + حفظ تلقائي في IndexedDB.
 // كل سجل له id فريد وتاريخ تعديل وعلامة حذف ناعم، ليصلح للمزامنة السحابية لاحقًا.
-import { uid, ymNow, ymIdx, ymRange, normDigits, parseNum } from './util.js';
+import { uid, ymNow, ymIdx, ymRange, normDigits, parseNum, fmtNum } from './util.js';
+
+const fmtMoney = (n) => `${fmtNum(n)} ${db ? db.settings.currency || 'د.ع' : ''}`.trim();
 
 const DB_NAME = 'generator-ledger';
 const STORE = 'kv';
@@ -16,7 +18,7 @@ const blank = () => ({
   v: 1,
   deviceId: uid(),
   createdAt: Date.now(),
-  settings: { pricePerAmp: 0, currency: 'د.ع', digits: 'latin', theme: 'auto', user: '', onboarded: false },
+  settings: { pricePerAmp: 0, currency: 'د.ع', digits: 'latin', theme: 'auto', user: '', onboarded: false, sound: true },
   generators: [],
   phases: [],
   cabinets: [],
@@ -28,6 +30,7 @@ const blank = () => ({
   receipts: [],
   ledger: [],
   parties: [],
+  prices: [],
   log: [],
   sync: { cfg: null, pushed: {}, lastPull: '' },
   settingsAt: 0,
@@ -83,7 +86,7 @@ export async function load() {
 function migrate(d) {
   const b = blank();
   const out = { ...b, ...d, settings: { ...b.settings, ...(d.settings || {}) } };
-  for (const k of ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'log', 'receipts', 'ledger', 'parties']) {
+  for (const k of ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'log', 'receipts', 'ledger', 'parties', 'prices']) {
     if (!Array.isArray(out[k])) out[k] = [];
   }
   if (!out.records || typeof out.records !== 'object') out.records = {};
@@ -94,16 +97,16 @@ function migrate(d) {
 export const flush = () => { clearTimeout(saveTimer); saveTimer = null; if (db) return writeRaw(JSON.stringify(db)); };
 const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(flush, 250); };
 
-function changed() {
+function changed(src) {
   idx = null;
   scheduleSave();
-  listeners.forEach((f) => f());
+  listeners.forEach((f) => f(src));
 }
 export const onChange = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
 
 /* ───────── أساسيات ───────── */
 const SHARED_SETTINGS = ['pricePerAmp', 'currency'];
-export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log', 'receipts', 'ledger', 'parties'];
+export const SYNC_KINDS = ['generators', 'phases', 'cabinets', 'connections', 'subscribers', 'debts', 'notes', 'records', 'log', 'receipts', 'ledger', 'parties', 'prices'];
 export const settings = () => db.settings;
 export const raw = () => db;
 export const live = (k) => db[k].filter((x) => !x.deleted);
@@ -115,7 +118,7 @@ export function setSetting(k, v) {
   changed();
 }
 export function add(k, o) {
-  const rec = stamp({ id: uid(), createdAt: Date.now(), ...o });
+  const rec = stamp({ id: uid(), createdAt: Date.now(), createdBy: db.settings.user || '', ...o });
   db[k].push(rec);
   changed();
   return rec;
@@ -128,8 +131,12 @@ export function upd(k, id, patch) {
   changed();
   return o;
 }
-export function logAct(text) {
-  db.log.unshift({ id: uid(), at: Date.now(), by: db.settings.user || '', text });
+export function logAct(text, subId, k) {
+  const e = { id: uid(), at: Date.now(), by: db.settings.user || '', text };
+  if (subId) e.subId = subId;
+  if (k) e.k = k;
+  e.updatedAt = e.at;
+  db.log.unshift(e);
   if (db.log.length > 400) db.log.length = 400;
 }
 
@@ -138,7 +145,7 @@ function build() {
   const I = {
     gen: new Map(), phase: new Map(), cab: new Map(), conn: new Map(), sub: new Map(),
     phasesByGen: new Map(), cabsByPhase: new Map(), connsByCab: new Map(), subsByConn: new Map(),
-    debtsBySub: new Map(), notesOpen: 0,
+    debtsBySub: new Map(), notesOpen: 0, ym: ymNow(), pc: new Map(), dc: new Map(), prices: [],
   };
   const push = (m, k, v) => { if (!m.has(k)) m.set(k, []); m.get(k).push(v); };
   for (const g of live('generators')) I.gen.set(g.id, g);
@@ -148,13 +155,14 @@ function build() {
   for (const s of live('subscribers')) if (I.conn.has(s.connectionId)) { I.sub.set(s.id, s); push(I.subsByConn, s.connectionId, s); }
   for (const d of live('debts')) push(I.debtsBySub, d.subId, d);
   for (const n of live('notes')) if (!n.done) I.notesOpen++;
+  I.prices = live('prices').sort((a, b) => (a.ym < b.ym ? -1 : a.ym > b.ym ? 1 : 0));
   const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.createdAt - b.createdAt);
   [I.phasesByGen, I.cabsByPhase].forEach((m) => m.forEach((a) => a.sort(byOrder)));
   I.connsByCab.forEach((a) => a.sort((x, y) => (x.no ?? 0) - (y.no ?? 0) || x.createdAt - y.createdAt));
   I.subsByConn.forEach((a) => a.sort((x, y) => x.createdAt - y.createdAt));
   return I;
 }
-export const ix = () => idx || (idx = build());
+export const ix = () => (idx && idx.ym === ymNow() ? idx : (idx = build()));
 
 export const generators = () => [...ix().gen.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.createdAt - b.createdAt);
 export const phasesOf = (genId) => ix().phasesByGen.get(genId) || [];
@@ -181,18 +189,47 @@ export const pathText = (sub) => {
 };
 
 /* ───────── الأسعار والاستحقاق ───────── */
-export function priceOfGen(genId) {
-  const g = ix().gen.get(genId);
-  return g && g.price > 0 ? g.price : db.settings.pricePerAmp || 0;
+// التسعيرة شهرية: لكل شهر سجل prices={ym, price, byGen}. الشهر بلا سجل يرث آخر سجل قبله، وإلا السعر القديم في الإعدادات.
+export function priceRecFor(ym) {
+  const list = ix().prices; let r = null;
+  for (let i = list.length - 1; i >= 0; i--) if (list[i].ym <= ym) { r = list[i]; break; }
+  return r;
 }
-export const dueOf = (sub) => Math.round((sub.amps || 0) * priceOfGen(pathOf(sub).gen?.id));
+export function priceFor(ym, genId) {
+  const I = ix(); const key = `${ym}|${genId || ''}`;
+  let v = I.pc.get(key);
+  if (v === undefined) {
+    const r = priceRecFor(ym);
+    const own = r && genId && r.byGen && r.byGen[genId] > 0 ? r.byGen[genId] : 0;
+    v = own || (r ? r.price || 0 : db.settings.pricePerAmp || 0);
+    I.pc.set(key, v);
+  }
+  return v;
+}
+export const priceOwn = (ym) => ix().prices.find((p) => p.ym === ym) || null;
+export const priceOfGen = (genId, ym = ymNow()) => priceFor(ym, genId);
+export function setPrice(ym, price, byGen = {}) {
+  const clean = {};
+  for (const [g, v] of Object.entries(byGen)) if (v > 0) clean[g] = v;
+  const cur = db.prices.find((p) => p.ym === ym);
+  const patch = { ym, price, byGen: clean, deleted: false };
+  if (cur) { Object.assign(cur, patch); stamp(cur); } else { db.prices.push(stamp({ id: `p-${ym}`, createdAt: Date.now(), createdBy: db.settings.user || '', ...patch })); }
+  logAct(`تسعيرة ${ym}: ${price}`, null, 'price');
+  changed();
+}
+export function clearPrice(ym) {
+  const cur = db.prices.find((p) => p.ym === ym && !p.deleted);
+  if (!cur) return;
+  cur.deleted = true; stamp(cur); logAct(`إلغاء تسعيرة ${ym}`, null, 'price'); changed();
+}
+export const dueOf = (sub, ym = ymNow()) => Math.round((sub.amps || 0) * priceFor(ym, pathOf(sub).gen?.id));
 
 export function rec(subId, ym) {
   const r = db.records[`${subId}|${ym}`];
   return r && !r.deleted ? r : null;
 }
 export const paidOf = (subId, ym) => (rec(subId, ym) ? rec(subId, ym).paid || 0 : 0);
-export function monthDue(sub, ym) { const r = rec(sub.id, ym); return r ? r.due || 0 : dueOf(sub); }
+export function monthDue(sub, ym) { const r = rec(sub.id, ym); return r ? r.due || 0 : dueOf(sub, ym); }
 export const remainOf = (sub, ym) => Math.max(0, monthDue(sub, ym) - paidOf(sub.id, ym));
 export function monthState(sub, ym) {
   const r = rec(sub.id, ym);
@@ -210,11 +247,16 @@ export function unpaidMonths(sub) {
 export function manualBalance(subId) {
   return (ix().debtsBySub.get(subId) || []).reduce((t, d) => t + (d.kind === 'payment' ? -d.amount : d.amount), 0);
 }
+// مخزَّنة لكل نسخة من الفهرس (تُمسح تلقائيًا عند أي تغيير) لأن الشاشات تستدعيها آلاف المرات
 export function debtOf(sub) {
+  const I = ix(); let v = I.dc.get(sub.id);
+  if (v) return v;
   const months = sub.active === false ? [] : unpaidMonths(sub);
   const monthsAmount = months.reduce((t, m) => t + remainOf(sub, m), 0);
   const manual = Math.max(0, manualBalance(sub.id));
-  return { months, monthsAmount, manual, total: monthsAmount + manual };
+  v = { months, monthsAmount, manual, total: monthsAmount + manual };
+  I.dc.set(sub.id, v);
+  return v;
 }
 // حالة عامة للعرض في القوائم
 export function statusOf(sub) {
@@ -224,7 +266,7 @@ export function statusOf(sub) {
   if (n === 0 && d.manual === 0) return { k: 'paid', text: 'مسدد', n };
   if (n === 0) return { k: 'debt', text: 'دين مسجّل', n };
   if (n === 1 && d.months[0] === ymNow()) return { k: 'due', text: 'مستحق', n };
-  return { k: 'debt', text: `متأخر ${n} ${n > 10 ? 'شهرًا' : n > 2 ? 'أشهر' : n === 2 ? 'شهران' : 'شهر'}`, n };
+  return { k: 'debt', text: n === 2 ? 'متأخر شهران' : `متأخر ${n} ${n > 10 ? 'شهرًا' : n > 2 ? 'أشهر' : 'شهر'}`, n };
 }
 
 export function stats(subs, ym = ymNow()) {
@@ -233,7 +275,7 @@ export function stats(subs, ym = ymNow()) {
     if (sub.active === false) continue;
     s.amps += sub.amps || 0;
     const st = monthState(sub, ym);
-    if (st !== 'before') { s.expected += dueOf(sub); s.dueCount++; }
+    if (st !== 'before') { s.expected += dueOf(sub, ym); s.dueCount++; }
     if (st === 'paid' || st === 'partial') s.collected += rec(sub.id, ym).paid || 0;
     if (st === 'paid') s.paidCount++;
     const d = debtOf(sub);
@@ -268,7 +310,7 @@ export function addSubscriber({ name, amps, phone, startYM, cabinetId, connectio
     conn = add('connections', { cabinetId, no: no || nextNo(phaseId), state: 'ok' });
   }
   const sub = add('subscribers', { connectionId: conn.id, name, amps: amps || 0, phone: phone || '', startYM: startYM || ymNow(), active: true, note: note || '' });
-  logAct(connectionId ? `إضافة شريك على الجوزة ${conn.no}: ${name}` : `إضافة مشترك: ${name} (جوزة ${conn.no})`);
+  logAct(connectionId ? `إضافة شريك على الجوزة ${conn.no}: ${name}` : `إضافة مشترك: ${name} (جوزة ${conn.no})`, sub.id, 'sub');
   return sub;
 }
 
@@ -286,7 +328,7 @@ export function payAmount(subId, yms, amount) {
   for (const ym of list) {
     const k = `${subId}|${ym}`;
     const cur = rec(subId, ym);
-    const due = cur ? cur.due || 0 : dueOf(sub);
+    const due = cur ? cur.due || 0 : dueOf(sub, ym);
     const already = cur ? cur.paid || 0 : 0;
     const need = Math.max(0, due - already);
     if (due > 0 && (left <= 0 || need <= 0)) continue;
@@ -300,7 +342,7 @@ export function payAmount(subId, yms, amount) {
   const r = add('receipts', { subId, kind: 'pay', amount: total, items, at: t });
   prev.__receipt = r.id;
   const short = Math.max(0, remainOfList(sub, list));
-  logAct(`استلام ${total} من ${sub.name}${short ? ` (يتبقى ${short})` : ''}`);
+  logAct(`استلام ${fmtMoney(total)} من ${sub.name}${short ? ` (يتبقى ${fmtMoney(short)})` : ''}`, subId, 'pay');
   changed();
   return { prev, receipt: r, total, short };
 }
@@ -317,7 +359,7 @@ export function unpayMonth(subId, ym) {
   r.deleted = true; r.updatedAt = Date.now();
   const rc = add('receipts', { subId, kind: 'cancel', amount: -(r.paid || 0), items: [{ ym, amount: -(r.paid || 0) }], at: Date.now() });
   prev.__receipt = rc.id;
-  logAct(`إلغاء تسديد شهر ${ym} — ${ix().sub.get(subId)?.name || ''}`);
+  logAct(`إلغاء تسديد شهر ${ym} — ${ix().sub.get(subId)?.name || ''}`, subId, 'cancel');
   changed();
   return prev;
 }
@@ -331,6 +373,7 @@ export function restoreRecords(prev) {
   }
   changed();
 }
+export const logOf = (subId) => db.log.filter((l) => l.subId === subId);
 export const receiptsOf = (subId) => live('receipts').filter((r) => r.subId === subId).sort((a, b) => b.at - a.at);
 
 /* ───────── الواردات والصادرات ───────── */
@@ -338,7 +381,7 @@ export const receiptsOf = (subId) => live('receipts').filter((r) => r.subId === 
 export function addLedger({ kind, amount, cat, partyId, note, at }) {
   const e = add('ledger', { kind, amount, cat: cat || '', partyId: partyId || null, note: note || '', at: at || Date.now() });
   const txt = { in: 'وارد', out: 'مصروف', owe: 'مطلوب لجهة' }[kind];
-  logAct(`${txt} ${amount}${cat ? ' — ' + cat : ''}`);
+  logAct(`${txt} ${fmtMoney(amount)}${cat ? ' — ' + cat : ''}`, null, 'ledger');
   return e;
 }
 export function addParty(name) { const p = add('parties', { name }); logAct(`قائمة جديدة: ${name}`); return p; }
@@ -363,7 +406,7 @@ export function monthReport(ym) {
 export function addDebtEntry({ subId, kind, amount, note }) {
   const d = add('debts', { subId, kind, amount, note: note || '', at: Date.now() });
   const name = ix().sub.get(subId)?.name || '';
-  logAct(kind === 'debt' ? `تسجيل دين ${amount} على ${name}` : `تسديد من الدين ${amount} — ${name}`);
+  logAct(kind === 'debt' ? `تسجيل دين ${fmtMoney(amount)} على ${name}` : `تسديد من الدين ${fmtMoney(amount)} — ${name}`, subId, 'debt');
   return d;
 }
 
@@ -394,7 +437,7 @@ export function removeSubscriber(id) {
   const siblings = subsOfConn(s.connectionId).filter((x) => x.id !== id);
   upd('subscribers', id, { deleted: true });
   if (!siblings.length) upd('connections', s.connectionId, { deleted: true });
-  logAct(`حذف مشترك: ${s.name}`);
+  logAct(`حذف مشترك: ${s.name}`, id, 'sub');
 }
 
 /* ───────── النسخ الاحتياطي ───────── */
@@ -517,7 +560,7 @@ export function markPushed(items) { items.forEach((i) => { db.sync.pushed[i.key]
 export function setSyncCfg(cfg) { db.sync.cfg = cfg; if (!cfg) { db.sync.pushed = {}; db.sync.lastPull = ''; } changed(); }
 export function setLastPull(c) { db.sync.lastPull = c; scheduleSave(); }
 export const unread = () => db.unread || 0;
-export function addUnread(k) { db.unread = (db.unread || 0) + k; scheduleSave(); listeners.forEach((f) => f()); }
+export function addUnread(k) { db.unread = (db.unread || 0) + k; scheduleSave(); listeners.forEach((f) => f('remote')); }
 export function clearUnread() { if (db.unread) { db.unread = 0; scheduleSave(); } }
 export function applyRemote(items, { notify = false } = {}) {
   let n = 0; const fresh = [];
@@ -539,7 +582,7 @@ export function applyRemote(items, { notify = false } = {}) {
   if (n) {
     db.log.sort((a, b) => b.at - a.at);
     if (db.log.length > 400) db.log.length = 400;
-    changed();
+    changed('remote');
   } else scheduleSave();
   return { n, fresh };
 }

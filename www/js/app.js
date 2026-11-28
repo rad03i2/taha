@@ -3,9 +3,11 @@ import { debounce } from './util.js';
 import * as S from './store.js';
 import { applyDigits, closeSheet, sheetOpen, icon, toast } from './ui.js';
 import { nav } from './nav.js';
-import { routes, ui, resetViewState, cabinetList, subsList, loginView } from './views.js';
-import { actions, handleSubmit } from './forms.js';
+import { routes, ui, resetViewState, cabinetList, subsList, loginView, syncCard } from './views.js';
+import { actions, handleSubmit, holdInfo, holdDone } from './forms.js';
 import * as SY from './sync.js';
+import { initHold, hold } from './hold.js';
+import { unlockAudio, wireTapSounds } from './fx.js';
 
 const $view = document.getElementById('view');
 const $tabs = document.getElementById('tabbar');
@@ -20,7 +22,7 @@ function parse() {
 
 let lastRoute = '';
 let current = null;
-
+const scrolls = new Map(); const trail = [];
 function renderTabs(active, hidden) {
   $tabs.hidden = hidden;
   $tabs.innerHTML = TABS.map(([k, t, ic, to]) => {
@@ -35,23 +37,46 @@ function render(keepScroll) {
   const r = parse();
   const key = `${r.name}/${r.id || ''}`;
   const changed = key !== lastRoute;
-  if (changed) { resetViewState(); lastRoute = key; }
+  let y = keepScroll && !changed ? window.scrollY : 0;
+  if (changed) {
+    // العودة لصفحة سابقة تستعيد موضع التمرير فيها
+    if (lastRoute) scrolls.set(lastRoute, window.scrollY);
+    const back = trail.length > 1 && trail[trail.length - 2] === key;
+    if (back) { trail.pop(); y = scrolls.get(key) || 0; } else { trail.push(key); if (trail.length > 60) trail.shift(); }
+    resetViewState(); lastRoute = key;
+  }
   const gate = SY.gateRequired();
   const fn = gate ? loginView : routes[r.name] || routes.home;
-  const y = keepScroll && !changed ? window.scrollY : 0;
   if (!gate && r.name === 'log') S.clearUnread();
   const out = fn({ id: r.id });
   current = out;
   $view.innerHTML = out.html;
-  $view.className = `view ${out.bare ? 'bare' : ''}`;
+  $view.className = `view ${out.bare ? 'bare' : ''} ${changed ? 'enter' : ''}`;
   applyDigits($view);
   renderTabs(out.tab, !!out.bare);
   document.title = 'حسابات المولدة';
-  if (changed) window.scrollTo(0, 0); else window.scrollTo(0, y);
+  window.scrollTo(0, y);
   mountLive(out.live);
   if (out.live === 'team' && !SY.teamList()) SY.loadTeam();
   applyTheme();
 }
+
+// دمج التحديثات المتتابعة في رسم واحد، وتأجيلها أثناء الكتابة أو الضغط المطوّل حتى لا تضيع لمسة المستخدم
+let rafId = 0; let wantKeep = true; let wantSoft = true; let deferred = false;
+const typing = () => { const a = document.activeElement; return !!(a && $view.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)); };
+// soft=true للتحديثات القادمة من المزامنة: تُؤجَّل أثناء الكتابة أو الضغط المطوّل. أما أفعال المستخدم نفسه فتُرسم فورًا.
+function schedule(keep = true, soft = false) {
+  wantKeep = wantKeep && keep; wantSoft = wantSoft && soft;
+  if (rafId) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = 0; const k = wantKeep; const sf = wantSoft; wantKeep = true; wantSoft = true;
+    if (k && sf && (hold.active || typing())) { deferred = true; return; }
+    deferred = false; render(k);
+  });
+}
+const flushDeferred = () => setTimeout(() => { if (deferred && !hold.active && !typing()) schedule(true, false); }, 450);
+document.addEventListener('focusout', flushDeferred);
+document.addEventListener('pointerup', flushDeferred);
 
 function mountLive(kind) {
   if (!kind) return;
@@ -71,11 +96,12 @@ function mountLive(kind) {
     ui.q = q.value; ui.limit = 60;
     list.innerHTML = kind === 'cab' ? cabinetList(list.dataset.cab) : subsList();
     applyDigits(list);
-  }, 120));
+  }, 70));
 }
 
 function applyTheme() {
   const t = S.settings().theme;
+  try { localStorage.setItem('gl.theme', t); } catch (e) { /* لا شيء */ }
   if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.dataset.theme = t;
   const dark = t === 'dark' || (t === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
   const P = window.Capacitor && window.Capacitor.Plugins;
@@ -110,9 +136,9 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSheet(); });
 
-window.addEventListener('hashchange', () => { while (closeSheet()); render(false); });
-nav.rerender = () => render(true);
-S.onChange(() => render(true));
+window.addEventListener('hashchange', () => { while (closeSheet()); cancelAnimationFrame(rafId); rafId = 0; render(false); });
+nav.rerender = () => schedule(true);
+S.onChange((src) => schedule(true, src === 'remote'));
 
 /* ───────── أندرويد: زر الرجوع ───────── */
 function wireNative() {
@@ -136,10 +162,17 @@ function wireNative() {
   await S.load();
   if (!location.hash) history.replaceState(null, '', '#/home');
   wireNative();
-  SY.onStatus(() => { const n = parse().name; if (n === 'more' || n === 'team' || SY.gateRequired() || document.querySelector('.welcome')) render(true); });
+  unlockAudio(); wireTapSounds();
+  initHold({ info: holdInfo, onDone: holdDone });
+  SY.onStatus(() => {
+    // بطاقة المزامنة تُحدَّث في مكانها دون إعادة رسم الصفحة
+    const slot = document.getElementById('sync-slot');
+    if (slot) { slot.innerHTML = syncCard(); applyDigits(slot); }
+    if (parse().name === 'team' || SY.gateRequired() || document.querySelector('.welcome, .login')) schedule(true);
+  });
   render(false);
-  SY.start();
   const sp = document.getElementById('splash');
-  if (sp) { sp.classList.add('out'); setTimeout(() => sp.remove(), 400); }
+  if (sp) { sp.classList.add('out'); setTimeout(() => sp.remove(), 260); }
+  setTimeout(() => SY.start(), 250); // بعد أول رسم: لا نؤخر ظهور الشاشة
   window.__gl = { S, ui, nav, SY }; // للاختبار والتشخيص
 })();

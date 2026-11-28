@@ -1,6 +1,7 @@
 // مكوّنات الواجهة المشتركة: أيقونات، نوافذ سفلية، إشعارات، أرقام
 import { esc, fmtNum } from './util.js';
 import { settings } from './store.js';
+import { sfx, haptic } from './fx.js';
 
 const P = {
   home: '<path d="M3.5 11.2 12 4l8.5 7.2"/><path d="M5.5 9.8V19a1 1 0 0 0 1 1h11a1 1 0 0 0 1-1V9.8"/><path d="M10 20v-5.2h4V20"/>',
@@ -37,6 +38,10 @@ const P = {
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
   undo: '<path d="M9 7 4.5 11.5 9 16"/><path d="M5 11.5h9.5a4.5 4.5 0 0 1 0 9H11"/>',
   calendar: '<rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3.5v3M16 3.5v3"/>',
+  bell: '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
+  tag: '<path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.4 1.4 0 0 1 0 2l-6.2 6.2a1.4 1.4 0 0 1-2 0z"/><circle cx="8.3" cy="8.3" r="1.3" fill="currentColor"/>',
+  volume: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+  vibrate: '<rect x="8" y="3.5" width="8" height="17" rx="2.4"/><path d="M4.5 8v8M19.5 8v8"/>',
 };
 export const icon = (n, cls = '') => `<svg class="ic ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${P[n] || ''}</svg>`;
 
@@ -70,7 +75,33 @@ export function toast(msg, opt = {}) {
   requestAnimationFrame(() => toastEl.classList.add('show'));
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), opt.undo ? 5200 : 2400);
-  try { navigator.vibrate && navigator.vibrate(10); } catch (e) { /* لا شيء */ }
+  if (opt.undo && !opt.quiet) { haptic('light'); sfx.ok(); }
+}
+
+/* ───────── إشعار داخلي بشكل إشعارات آيفون ───────── */
+let nb = null; let nbTimer = null; let nbTap = null;
+const hideNb = () => { clearTimeout(nbTimer); if (nb) nb.classList.remove('show'); };
+export function banner({ title, body, ic = 'bolt', onTap, silent = false }) {
+  if (!nb) {
+    nb = document.createElement('div'); nb.className = 'nb'; nb.setAttribute('role', 'status');
+    document.body.appendChild(nb);
+    let y0 = 0; let dy = 0; let down = false;
+    nb.addEventListener('pointerdown', (e) => { down = true; y0 = e.clientY; dy = 0; clearTimeout(nbTimer); nb.style.transition = 'none'; });
+    nb.addEventListener('pointermove', (e) => { if (!down) return; dy = Math.min(0, e.clientY - y0); nb.style.transform = `translate(-50%, ${dy}px)`; });
+    const end = () => {
+      if (!down) return; down = false; nb.style.transition = ''; nb.style.transform = '';
+      if (dy < -28) return hideNb();
+      if (Math.abs(dy) < 6 && nbTap) { const f = nbTap; hideNb(); f(); return; }
+      nbTimer = setTimeout(hideNb, 2500);
+    };
+    nb.addEventListener('pointerup', end); nb.addEventListener('pointercancel', end);
+  }
+  nbTap = onTap || null;
+  nb.innerHTML = `<div class="nb-ic">${icon(ic)}</div><div class="nb-t"><div class="nb-h"><b>${esc(title)}</b><small>الآن</small></div><p>${esc(body)}</p></div>`;
+  applyDigits(nb);
+  nb.classList.remove('show'); void nb.offsetWidth; nb.classList.add('show');
+  clearTimeout(nbTimer); nbTimer = setTimeout(hideNb, 5000);
+  if (!silent) { sfx.notify(); haptic('success'); }
 }
 
 /* ───────── النوافذ السفلية ───────── */
