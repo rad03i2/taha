@@ -1,0 +1,10 @@
+// يحوّل Maven Central إلى مرآة Google عند حجب/تقييد (429) خوادم GitHub. يُستعمل كمحاولة احتياطية فقط.
+def mirror = 'https://maven-central.storage-download.googleapis.com/maven2/'
+def swap = { repo ->
+  if (repo instanceof MavenArtifactRepository && repo.url.toString().contains('repo.maven.apache.org')) { repo.url = mirror }
+}
+allprojects {
+  buildscript.repositories.configureEach(swap)
+  repositories.configureEach(swap)
+}
+settingsEvaluated { s -> s.pluginManagement.repositories.configureEach(swap) }
